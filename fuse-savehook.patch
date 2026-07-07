@@ -1,0 +1,93 @@
+Fuse ZX Spectrum emulator - per-name tape autosave
+==================================================
+
+What it does
+    Makes SAVE "name" write a standalone tape file to $FUSE_SAVE_DIR/name.tzx
+    (one program per file), written atomically (temp file + rename) so a power
+    loss mid-save cannot corrupt an existing file. LOAD is unaffected.
+    Inert unless the environment variable FUSE_SAVE_DIR is set.
+
+Target
+    Fuse source tree, file: tape.c (function tape_save_trap).
+    Written against Fuse 1.8.0 / current source.
+
+How to apply (from inside the unpacked Fuse source directory)
+    cd fuse-1.8.0
+    patch -p0 < /path/to/fuse-savehook.patch
+
+    Then build as usual:
+    ./configure --without-gtk --with-sdl && make && sudo make install
+
+    Minor "offset"/"fuzz" messages from patch are fine; only a "FAILED"/
+    "*.rej" file means the source differs too much - re-cut against your tape.c.
+
+How to reverse
+    cd fuse-1.8.0
+    patch -R -p0 < /path/to/fuse-savehook.patch
+
+Runtime
+    Launch Fuse with the target directory exported, e.g.:
+    FUSE_SAVE_DIR="$HOME/tapes" fuse --full-screen --no-statusbar
+
+--------------------------------------------------------------------------
+--- tape.c
++++ tape.c
+@@ -573,6 +573,11 @@
+ 
+   int i;
+ 
++  /* --- per-name autosave: SAVE "name" -> $FUSE_SAVE_DIR/name.tzx --- */
++  static char autosave_name[16];
++  static int  autosave_have_name = 0;
++  const char *autosave_dir = getenv( "FUSE_SAVE_DIR" );
++
+   /* Do nothing if tape traps aren't active */
+   if( !settings_current.tape_traps || tape_recording ||
+       rzx_playback || rzx_recording )
+@@ -581,6 +586,13 @@
+   /* Check we're in the right ROM */
+   if( !trap_check_rom( CHECK_TAPE_ROM ) ) return 3;
+ 
++  /* per-name autosave: a header block (flag 0x00 in A) begins a new SAVE,
++     so start a fresh tape to keep one program per output file */
++  if( autosave_dir && A == 0x00 ) {
++    libspectrum_tape_free( tape );
++    tape = libspectrum_tape_alloc();
++  }
++
+   block = libspectrum_tape_block_alloc( LIBSPECTRUM_TAPE_BLOCK_ROM );
+   
+   /* The +2 here is for the flag and parity bytes */
+@@ -611,6 +623,32 @@
+   tape_modified = 1;
+   ui_tape_browser_update( UI_TAPE_BROWSER_NEW_BLOCK, block );
+ 
++  /* per-name autosave: remember the name from the header block, then on the
++     following data block dump the completed one-program tape to disk. The
++     write goes to a temp file first and is renamed into place, so pulling
++     the power mid-write can never corrupt an existing saved program. */
++  if( autosave_dir ) {
++    if( data[0] == 0x00 ) {                  /* header block: capture name  */
++      int j; char *p = autosave_name;
++      for( j = 0; j < 10; j++ ) {
++        libspectrum_byte c = data[ 2 + j ];
++        if( c < 0x20 || c > 0x7e || c == '/' || c == '\\' ) c = '_';
++        *p++ = (char)c;
++      }
++      while( p > autosave_name && ( p[-1] == ' ' || p[-1] == '_' ) ) p--;
++      *p = '\0';
++      if( autosave_name[0] == '\0' ) strcpy( autosave_name, "untitled" );
++      autosave_have_name = 1;
++    } else if( autosave_have_name ) {        /* data block: pair complete   */
++      char path[ 4096 ], tmp[ 4096 ];
++      snprintf( path, sizeof( path ), "%s/%s.tzx", autosave_dir, autosave_name );
++      snprintf( tmp,  sizeof( tmp  ), "%s/.%s.tzx.tmp", autosave_dir,
++                autosave_name );
++      if( tape_write( tmp ) == 0 ) rename( tmp, path );
++      autosave_have_name = 0;
++    }
++  }
++
+   /* And then return via the RET at #053E, except on Timex 2068 at #00E4 */
+   if ( machine_current->machine == LIBSPECTRUM_MACHINE_TC2068 ||
+        machine_current->machine == LIBSPECTRUM_MACHINE_TS2068 ) {
