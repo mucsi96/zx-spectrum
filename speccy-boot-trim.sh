@@ -107,8 +107,6 @@ log "[4] Misc daemons"
 disable_unit triggerhappy.service
 disable_unit triggerhappy.socket
 disable_unit ModemManager.service
-disable_unit avahi-daemon.service
-disable_unit avahi-daemon.socket
 hr
 
 # --- 5) background timers (reduce post-boot SD-card thrash) -----------------
