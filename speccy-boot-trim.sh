@@ -76,14 +76,68 @@ disable_unit() {
 }
 
 # --- 1) cloud-init (biggest single win once provisioning is done) ----------
+#
+# WARNING: if cloud-init is provisioning your WiFi at each boot, disabling it
+# drops the connection and the Pi never rejoins the network (headless lock-out).
+# So before disabling cloud-init we persist the currently-active WiFi into a
+# standalone NetworkManager keyfile that survives without cloud-init.
+#
+# preserve_active_wifi: returns 0 if wlan0's config is (now) safe without
+# cloud-init, non-zero if we could not guarantee it.
+preserve_active_wifi() {
+  # No WiFi in play (e.g. wired-only) -> nothing to preserve.
+  [ -d /sys/class/net/wlan0 ] || { log "  no wlan0 interface — no WiFi to preserve"; return 0; }
+  if ! command -v nmcli >/dev/null 2>&1; then
+    log "  nmcli not found — cannot verify WiFi persistence"
+    return 1
+  fi
+
+  local con
+  con="$(nmcli -t -g GENERAL.CONNECTION device show wlan0 2>/dev/null)"
+  if [ -z "$con" ] || [ "$con" = "--" ]; then
+    log "  wlan0 is not connected — no active WiFi profile to preserve"
+    # Nothing is connected, so disabling cloud-init can't drop a live link.
+    return 0
+  fi
+
+  # Already a persistent keyfile on disk -> it will survive cloud-init going away.
+  if [ -f "/etc/NetworkManager/system-connections/${con}.nmconnection" ]; then
+    log "  active WiFi '$con' already persisted as a NetworkManager keyfile — safe"
+    return 0
+  fi
+
+  # Otherwise clone it to a standalone, autoconnecting profile that NetworkManager
+  # owns on disk (independent of cloud-init). clone copies the PSK for us.
+  local newname="${con}-persistent"
+  if nmcli connection show "$newname" >/dev/null 2>&1; then
+    log "  persistent WiFi profile '$newname' already exists — safe"
+    return 0
+  fi
+  if nmcli connection clone "$con" "$newname" >/dev/null 2>&1; then
+    nmcli connection modify "$newname" connection.autoconnect yes \
+          connection.autoconnect-priority 100 >/dev/null 2>&1
+    log "  cloned active WiFi '$con' -> persistent profile '$newname' (autoconnect on)"
+    log "  saved: /etc/NetworkManager/system-connections/${newname}.nmconnection"
+    return 0
+  fi
+
+  log "  FAILED to persist WiFi '$con' — refusing to disable cloud-init"
+  return 1
+}
+
 log "[1] cloud-init"
 if [ -d /etc/cloud ]; then
   if [ -e /etc/cloud/cloud-init.disabled ]; then
     log "  already disabled"
-  else
+  elif preserve_active_wifi; then
     touch /etc/cloud/cloud-init.disabled
     log "  disabled (created /etc/cloud/cloud-init.disabled)"
     log "  NOTE: re-flash the card if you ever want cloud-init provisioning again"
+  else
+    log "  SKIPPED disabling cloud-init to avoid a WiFi lock-out."
+    log "  Set up a persistent NetworkManager WiFi profile first, e.g.:"
+    log "    sudo nmcli device wifi connect \"YOUR_SSID\" password \"YOUR_PASSWORD\""
+    log "  then re-run this script."
   fi
 else
   log "  not installed, skipping"
