@@ -70,11 +70,13 @@ COMMANDS = {
     ],
 }
 
-# Display colours per group (border / light fill), used on the printed cards.
+# Per-group display info. No colours on the cards themselves (colour is only ever
+# used inside the AI pictures). Decks are told apart by a text label plus a number
+# of small black squares ("rank"), so a deck can still be sorted out after cutting.
 GROUP_STYLE = {
-    "simple":       {"label": "Simple",       "border": "#2E7D32", "fill": "#E8F5E9"},
-    "intermediate": {"label": "Intermediate", "border": "#E65100", "fill": "#FFF3E0"},
-    "advanced":     {"label": "Advanced",     "border": "#6A1B9A", "fill": "#F3E5F5"},
+    "simple":       {"label": "Simple",       "rank": 1},
+    "intermediate": {"label": "Intermediate", "rank": 2},
+    "advanced":     {"label": "Advanced",     "rank": 3},
 }
 
 GROUP_ORDER = ["simple", "intermediate", "advanced"]

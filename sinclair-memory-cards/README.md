@@ -5,11 +5,13 @@ the Sinclair BASIC commands of the rubber-key ZX Spectrum.
 
 Each command becomes a **matching pair**:
 
-- a **word card** — the BASIC keyword (`PRINT`, `BEEP`, `CIRCLE`, …) with a short,
-  child-friendly description, and
+- a **word card** — just the BASIC keyword (`PRINT`, `BEEP`, `CIRCLE`, …), big and clear, and
 - a **picture card** — an AI-drawn pictogram of what the command does.
 
-The child wins a pair by matching the keyword to the right picture.
+The child wins a pair by matching the keyword to the right picture. There is no
+other text to read: the cards are plain **square, black-on-white** cards, and the
+only colour anywhere is inside the pictures. The pictures are **white-background
+vector-graphic art** in one consistent style across the whole deck.
 
 ## How the pictures are made (two AI steps per command)
 
@@ -25,15 +27,16 @@ pay for the same picture twice.
 
 Commands are split into three decks, so you can start easy and add harder cards later:
 
-| Deck | Colour | Commands |
-|------|--------|----------|
-| **Simple** (used every session) | green | `PRINT` `LET` `INPUT` `RUN` `LIST` `CLS` `GOTO` `NEW` |
-| **Intermediate** (loops, sound, colour) | orange | `IF` `FOR` `GOSUB` `BEEP` `PAUSE` `BORDER` `PAPER` `INK` |
-| **Advanced** (graphics, memory, data) | purple | `PLOT` `DRAW` `CIRCLE` `POKE` `PEEK` `DATA` `DIM` `RANDOMIZE` |
+| Deck | Corner mark | Commands |
+|------|-------------|----------|
+| **Simple** (used every session) | 1 dot | `PRINT` `LET` `INPUT` `RUN` `LIST` `CLS` `GOTO` `NEW` |
+| **Intermediate** (loops, sound, colour) | 2 dots | `IF` `FOR` `GOSUB` `BEEP` `PAUSE` `BORDER` `PAPER` `INK` |
+| **Advanced** (graphics, memory, data) | 3 dots | `PLOT` `DRAW` `CIRCLE` `POKE` `PEEK` `DATA` `DIM` `RANDOMIZE` |
 
-Each deck is 8 commands = 16 cards = exactly **one A4 page** (a 4×4 grid).
-Every card carries the deck's colour and a matching corner dot, so after cutting you
-can keep the Simple deck separate and play with just those first.
+Each deck is 8 commands = 16 cards, printed on its own A4 page. The only marking of
+the deck is one, two or three **small faint dots** in the top-right corner — deliberately
+unobtrusive, just enough to sort the cards back into decks after cutting so you can
+play with the Simple deck on its own first.
 
 ## Usage
 
@@ -59,8 +62,8 @@ python generate_cards.py --skip-generation
 ```
 
 The result is `sinclair-memory-cards.pdf`. Print it at **100% / actual size**
-(turn off "fit to page"), then cut along the rounded card borders. Card size is
-about 44 × 66 mm — a comfortable size for small hands. Printing on thin card or
+(turn off "fit to page"), then cut along the square card borders. Cards are about
+44 × 44 mm squares — a comfortable size for small hands. Printing on thin card or
 gluing to cardboard makes the cards last longer and stops the picture showing
 through from behind.
 

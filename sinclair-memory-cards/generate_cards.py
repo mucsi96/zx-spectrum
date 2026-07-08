@@ -38,7 +38,7 @@ from pathlib import Path
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
-from reportlab.lib.colors import HexColor, Color
+from reportlab.lib.colors import HexColor
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase.pdfmetrics import stringWidth
 
@@ -54,10 +54,11 @@ OPENAI_IMAGE_MODEL = os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-1")
 
 # Appended to every image prompt so the whole deck shares one look.
 STYLE_SUFFIX = (
-    " Flat, colourful children's picture-book cartoon style, bold simple shapes, "
-    "thick clean outlines, bright friendly colours, one clear centred subject, "
-    "plain white background, plenty of empty margin, no text, no letters, no numbers, "
-    "no words anywhere in the image."
+    " Vector graphic art: clean flat vector illustration, bold geometric shapes, "
+    "crisp smooth outlines, bright flat colour fills, no gradients, no shading, "
+    "no photographic texture, one clear friendly centred subject, "
+    "pure solid white background, generous empty margin, "
+    "no text, no letters, no numbers, no words anywhere in the image."
 )
 
 CLAUDE_SYSTEM = (
@@ -160,11 +161,14 @@ def generate_assets(groups: list[str]) -> dict:
 PAGE_W, PAGE_H = A4
 MARGIN = 10 * mm
 GUTTER = 4 * mm
-COLS, ROWS = 4, 4
+COLS = 4
+# Square cards, so more rows fit down the page than the old tall cards.
+CARD = (PAGE_W - 2 * MARGIN - (COLS - 1) * GUTTER) / COLS
+ROWS = int((PAGE_H - 2 * MARGIN + GUTTER) // (CARD + GUTTER))
 PER_PAGE = COLS * ROWS
-CARD_W = (PAGE_W - 2 * MARGIN - (COLS - 1) * GUTTER) / COLS
-CARD_H = (PAGE_H - 2 * MARGIN - (ROWS - 1) * GUTTER) / ROWS
-RADIUS = 3 * mm
+
+# The cards themselves are black on white only — colour lives solely in the pictures.
+INK = HexColor("#000000")
 
 
 def _fit_font(text: str, font: str, max_w: float, start: float, min_size: float = 8) -> float:
@@ -189,85 +193,72 @@ def _wrap(text: str, font: str, size: float, max_w: float) -> list[str]:
     return lines
 
 
-def _corner_dot(c: canvas.Canvas, x: float, y: float, border: Color) -> None:
-    c.setFillColor(border)
-    c.setStrokeColor(border)
-    c.circle(x + CARD_W - 5 * mm, y + CARD_H - 5 * mm, 2 * mm, stroke=0, fill=1)
+def _deck_marks(c: canvas.Canvas, x: float, y: float, rank: int) -> None:
+    """Small, faint dots in the top-right corner mark the deck without shouting:
+    1 dot = Simple, 2 = Intermediate, 3 = Advanced. Only used for sorting cut cards."""
+    r, gap = 0.9 * mm, 1.5 * mm
+    c.setFillColor(HexColor("#B0B0B0"))
+    for i in range(rank):
+        cx = x + CARD - 3.5 * mm - i * gap
+        c.circle(cx, y + CARD - 3.5 * mm, r, stroke=0, fill=1)
 
 
-def draw_card_frame(c: canvas.Canvas, x: float, y: float, style: dict, fill: bool) -> None:
-    border = HexColor(style["border"])
-    c.setLineWidth(1.6)
-    c.setStrokeColor(border)
-    c.setFillColor(HexColor(style["fill"]) if fill else HexColor("#FFFFFF"))
-    c.roundRect(x, y, CARD_W, CARD_H, RADIUS, stroke=1, fill=1)
-    # small group label, top-left
-    c.setFillColor(border)
-    c.setFont("Helvetica-Bold", 6)
-    c.drawString(x + 4 * mm, y + CARD_H - 6.5 * mm, style["label"].upper())
-    _corner_dot(c, x, y, border)
+def draw_card_frame(c: canvas.Canvas, x: float, y: float, style: dict) -> None:
+    c.setLineWidth(1.2)
+    c.setStrokeColor(INK)
+    c.setFillColor(HexColor("#FFFFFF"))
+    c.rect(x, y, CARD, CARD, stroke=1, fill=1)  # square, sharp corners
+    _deck_marks(c, x, y, style["rank"])
 
 
 def draw_word_card(c: canvas.Canvas, x: float, y: float, info: dict, style: dict) -> None:
-    draw_card_frame(c, x, y, style, fill=True)
-    border = HexColor(style["border"])
-    inner_w = CARD_W - 8 * mm
-
+    """Just the command keyword, big and centred. Nothing else to read."""
+    draw_card_frame(c, x, y, style)
     keyword = info["cmd"]
-    size = _fit_font(keyword, "Helvetica-Bold", inner_w, 30)
-    c.setFillColor(border)
+    size = _fit_font(keyword, "Helvetica-Bold", CARD - 7 * mm, 34)
+    c.setFillColor(INK)
     c.setFont("Helvetica-Bold", size)
-    c.drawCentredString(x + CARD_W / 2, y + CARD_H * 0.58, keyword)
-
-    c.setFillColor(HexColor("#333333"))
-    lines = _wrap(info["desc"], "Helvetica", 9, inner_w)
-    ty = y + CARD_H * 0.40
-    c.setFont("Helvetica", 9)
-    for line in lines:
-        c.drawCentredString(x + CARD_W / 2, ty, line)
-        ty -= 4.6 * mm
+    c.drawCentredString(x + CARD / 2, y + CARD / 2 - size * 0.34, keyword)
 
 
 def draw_picture_card(c: canvas.Canvas, x: float, y: float, info: dict, style: dict,
                       img_path: Path | None) -> None:
-    draw_card_frame(c, x, y, style, fill=False)
-    pad = 6 * mm
+    """Just the picture, filling the card."""
+    draw_card_frame(c, x, y, style)
+    pad = 3.5 * mm
     box_x, box_y = x + pad, y + pad
-    box_w, box_h = CARD_W - 2 * pad, CARD_H - 2 * pad - 4 * mm
+    box = CARD - 2 * pad
     if img_path and img_path.exists():
-        c.drawImage(str(img_path), box_x, box_y, box_w, box_h,
+        c.drawImage(str(img_path), box_x, box_y, box, box,
                     preserveAspectRatio=True, anchor="c", mask="auto")
     else:
         # placeholder so you can preview the layout without any API calls
         c.setStrokeColor(HexColor("#BBBBBB"))
         c.setFillColor(HexColor("#FAFAFA"))
         c.setDash(2, 2)
-        c.roundRect(box_x, box_y, box_w, box_h, 2 * mm, stroke=1, fill=1)
+        c.rect(box_x, box_y, box, box, stroke=1, fill=1)
         c.setDash()
         c.setFillColor(HexColor("#999999"))
-        c.setFont("Helvetica-Oblique", 8)
-        c.drawCentredString(x + CARD_W / 2, y + CARD_H / 2 + 2 * mm, "picture of")
-        c.setFont("Helvetica-Bold", 11)
-        c.drawCentredString(x + CARD_W / 2, y + CARD_H / 2 - 4 * mm, info["cmd"])
+        c.setFont("Helvetica-Oblique", 7)
+        c.drawCentredString(x + CARD / 2, y + CARD / 2 + 1 * mm, "picture of")
+        c.setFont("Helvetica-Bold", 10)
+        c.drawCentredString(x + CARD / 2, y + CARD / 2 - 4 * mm, info["cmd"])
 
 
 def build_pdf(groups: list[str], output: Path) -> None:
     c = canvas.Canvas(str(output), pagesize=A4)
     for group in groups:
         style = GROUP_STYLE[group]
-        cards = []  # (kind, info)
-        for info in COMMANDS[group]:
-            cards.append(("word", info))
-        for info in COMMANDS[group]:
-            cards.append(("pic", info))
+        cards = [("word", info) for info in COMMANDS[group]]
+        cards += [("pic", info) for info in COMMANDS[group]]
 
         for page_start in range(0, len(cards), PER_PAGE):
             page_cards = cards[page_start:page_start + PER_PAGE]
             for i, (kind, info) in enumerate(page_cards):
                 col = i % COLS
                 row = i // COLS
-                x = MARGIN + col * (CARD_W + GUTTER)
-                y = PAGE_H - MARGIN - CARD_H - row * (CARD_H + GUTTER)
+                x = MARGIN + col * (CARD + GUTTER)
+                y = PAGE_H - MARGIN - CARD - row * (CARD + GUTTER)
                 if kind == "word":
                     draw_word_card(c, x, y, info, style)
                 else:
