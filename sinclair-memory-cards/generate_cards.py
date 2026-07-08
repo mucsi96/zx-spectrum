@@ -83,8 +83,7 @@ def slugify(cmd: str) -> str:
 def get_image_prompt(client, info: dict) -> str:
     user = (
         f"Sinclair BASIC command: {info['cmd']}\n"
-        f"What it does: {info['does']}\n"
-        f"Child-friendly hint: {info['desc']}"
+        f"What it does: {info['does']}"
     )
     resp = client.messages.create(
         model=CLAUDE_MODEL,

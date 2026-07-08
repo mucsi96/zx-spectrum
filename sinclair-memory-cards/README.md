@@ -25,18 +25,26 @@ pay for the same picture twice.
 
 ## Groups
 
-Commands are split into three decks, so you can start easy and add harder cards later:
+Every named keyword printed on the rubber-key keyboard in **white** (keyword mode),
+**green** (extended mode) and **red** (symbol shift) is included — the full Sinclair
+BASIC command set (the bare comparison glyphs `<=` `>=` `<>` and pure punctuation
+are the only things left out, as they aren't named commands). They are split into
+three decks so you can start small and add harder cards later:
 
 | Deck | Corner mark | Commands |
 |------|-------------|----------|
-| **Simple** (used every session) | 1 dot | `PRINT` `LET` `INPUT` `RUN` `LIST` `CLS` `GOTO` `NEW` |
-| **Intermediate** (loops, sound, colour) | 2 dots | `IF` `FOR` `GOSUB` `BEEP` `PAUSE` `BORDER` `PAPER` `INK` |
-| **Advanced** (graphics, memory, data) | 3 dots | `PLOT` `DRAW` `CIRCLE` `POKE` `PEEK` `DATA` `DIM` `RANDOMIZE` |
+| **Simple** — typed every session, plus colour & sound | 1 dot | `PRINT` `LET` `INPUT` `RUN` `LIST` `CLS` `NEW` `GOTO` `GOSUB` `RETURN` `IF` `THEN` `FOR` `TO` `STEP` `NEXT` `PAUSE` `STOP` `REM` `BORDER` `PAPER` `INK` `FLASH` `BRIGHT` `INVERSE` `OVER` `BEEP` `CLEAR` `CONTINUE` `COPY` `LOAD` `SAVE` |
+| **Intermediate** — graphics, data, printer, files, common functions | 2 dots | `PLOT` `DRAW` `CIRCLE` `POKE` `PEEK` `DIM` `DATA` `READ` `RESTORE` `RANDOMIZE` `AT` `TAB` `LINE` `LPRINT` `LLIST` `LEN` `STR$` `VAL` `VAL$` `CHR$` `CODE` `RND` `INKEY$` `AND` `OR` `NOT` `DEF FN` `FN` `MERGE` `VERIFY` `CAT` `FORMAT` `MOVE` `ERASE` `OPEN #` `CLOSE #` `IN` `OUT` |
+| **Advanced** — maths & machine functions | 3 dots | `SIN` `COS` `TAN` `ASN` `ACS` `ATN` `LN` `EXP` `INT` `SQR` `SGN` `ABS` `PI` `USR` `BIN` `POINT` `SCREEN$` `ATTR` |
 
-Each deck is 8 commands = 16 cards, printed on its own A4 page. The only marking of
-the deck is one, two or three **small faint dots** in the top-right corner — deliberately
-unobtrusive, just enough to sort the cards back into decks after cutting so you can
-play with the Simple deck on its own first.
+Each deck flows across as many A4 pages as it needs (20 cards to a page, in a 4×5
+grid of squares). The only marking of the deck is one, two or three **small faint dots** in the
+top-right corner — deliberately unobtrusive, just enough to sort the cards back into
+decks after cutting so you can play with the Simple deck on its own first.
+
+> The full deck is 88 commands = 176 cards, so a full run makes 88 Claude calls and
+> 88 image calls (all cached, so you only pay once). Generate one deck at a time with
+> `--groups simple` if you'd rather spread out the cost.
 
 ## Usage
 
