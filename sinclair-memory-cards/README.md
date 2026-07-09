@@ -50,8 +50,9 @@ decks after cutting so you can play with the Simple deck on its own first.
 
 ### Nix flakes (recommended)
 
-The `flake.nix` here provides a pinned Python that already has the dependencies
-— no virtualenv, no `pip install`. It reads the package list straight from
+The `flake.nix` here provides a pinned Python (currently 3.12 — set via
+`pythonAttr` at the top of the flake) that already has the dependencies — no
+virtualenv, no `pip install`. It reads the package list straight from
 `requirements.txt`, so the dependencies are only ever listed in one place.
 
 ```bash

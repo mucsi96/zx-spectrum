@@ -9,18 +9,23 @@
       forAllSystems = f:
         nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
+      # Pin the Python version here (the only place to change it to bump).
+      pythonAttr = "python312";
+
       # Single source of truth: read the dependency names from requirements.txt,
-      # strip version specifiers/comments, and resolve each against python3Packages.
+      # strip version specifiers/comments, and resolve each against the pinned
+      # interpreter's package set.
       pythonEnvFor = pkgs:
         let
+          python = pkgs.${pythonAttr};
           lines = pkgs.lib.splitString "\n" (builtins.readFile ./requirements.txt);
           nameOf = line:
             let m = builtins.match "[[:space:]]*([A-Za-z0-9][A-Za-z0-9._-]*).*" line;
             in if m == null then null else builtins.head m;
           names = builtins.filter (n: n != null) (map nameOf lines);
-          deps = map (n: pkgs.python3Packages.${n}) names;
+          deps = map (n: python.pkgs.${n}) names;
         in
-        pkgs.python3.withPackages (_: deps);
+        python.withPackages (_: deps);
     in
     {
       devShells = forAllSystems (pkgs: {
