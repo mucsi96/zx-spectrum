@@ -46,13 +46,34 @@ decks after cutting so you can play with the Simple deck on its own first.
 > 88 image calls (all cached, so you only pay once). Generate one deck at a time with
 > `--groups simple` if you'd rather spread out the cost.
 
-## Usage
+## Setting up the environment
+
+### Nix flakes (recommended)
+
+The `flake.nix` here provides a pinned Python that already has `reportlab`,
+`anthropic` and `openai` — no virtualenv, no `pip install`.
+
+```bash
+cd sinclair-memory-cards
+nix develop            # drops you into a shell with the right Python
+```
+
+If you use [direnv](https://direnv.net), an `.envrc` is included — run
+`direnv allow` once and the shell loads automatically whenever you `cd` in.
+
+### Plain pip (alternative)
 
 ```bash
 cd sinclair-memory-cards
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+```
 
+## Generating the cards
+
+Once you're in the environment (Nix shell or venv):
+
+```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 export OPENAI_API_KEY=sk-...
 
@@ -85,6 +106,8 @@ through from behind.
 ## Files
 
 - `generate_cards.py` — the generator (AI calls + PDF layout)
-- `commands.py` — the command list, descriptions and deck colours (edit to taste)
-- `requirements.txt` — Python dependencies
+- `commands.py` — the command list and deck definitions (edit to taste)
+- `flake.nix` — Nix dev shell with the pinned Python + dependencies
+- `.envrc` — optional direnv hook to auto-load the Nix shell
+- `requirements.txt` — Python dependencies (for the plain-pip route)
 - `cache/` — generated prompts and images (safe to delete to regenerate)

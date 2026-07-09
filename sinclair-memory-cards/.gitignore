@@ -3,6 +3,11 @@
 __pycache__/
 *.pyc
 
+# Nix / direnv
+result
+result-*
+.direnv/
+
 # Generated output and AI cache
 cache/
 *.pdf
