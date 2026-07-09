@@ -9,12 +9,18 @@
       forAllSystems = f:
         nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
-      # Python with exactly the runtime dependencies the generator needs.
-      pythonEnvFor = pkgs: pkgs.python3.withPackages (ps: with ps; [
-        reportlab
-        anthropic
-        openai
-      ]);
+      # Single source of truth: read the dependency names from requirements.txt,
+      # strip version specifiers/comments, and resolve each against python3Packages.
+      pythonEnvFor = pkgs:
+        let
+          lines = pkgs.lib.splitString "\n" (builtins.readFile ./requirements.txt);
+          nameOf = line:
+            let m = builtins.match "[[:space:]]*([A-Za-z0-9][A-Za-z0-9._-]*).*" line;
+            in if m == null then null else builtins.head m;
+          names = builtins.filter (n: n != null) (map nameOf lines);
+          deps = map (n: pkgs.python3Packages.${n}) names;
+        in
+        pkgs.python3.withPackages (_: deps);
     in
     {
       devShells = forAllSystems (pkgs: {

@@ -50,8 +50,9 @@ decks after cutting so you can play with the Simple deck on its own first.
 
 ### Nix flakes (recommended)
 
-The `flake.nix` here provides a pinned Python that already has `reportlab`,
-`anthropic` and `openai` — no virtualenv, no `pip install`.
+The `flake.nix` here provides a pinned Python that already has the dependencies
+— no virtualenv, no `pip install`. It reads the package list straight from
+`requirements.txt`, so the dependencies are only ever listed in one place.
 
 ```bash
 cd sinclair-memory-cards
@@ -107,7 +108,7 @@ through from behind.
 
 - `generate_cards.py` — the generator (AI calls + PDF layout)
 - `commands.py` — the command list and deck definitions (edit to taste)
-- `flake.nix` — Nix dev shell with the pinned Python + dependencies
+- `flake.nix` — Nix dev shell; reads its package list from `requirements.txt`
 - `.envrc` — optional direnv hook to auto-load the Nix shell
-- `requirements.txt` — Python dependencies (for the plain-pip route)
+- `requirements.txt` — the one dependency list, used by both pip and the flake
 - `cache/` — generated prompts and images (safe to delete to regenerate)
