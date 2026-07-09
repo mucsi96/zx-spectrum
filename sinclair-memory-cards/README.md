@@ -71,14 +71,24 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Generating the cards
+## Secrets (`.env`)
 
-Once you're in the environment (Nix shell or venv):
+Copy `.env.example` to `.env` and fill in your keys:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-export OPENAI_API_KEY=sk-...
+cp .env.example .env
+$EDITOR .env        # set ANTHROPIC_API_KEY and OPENAI_API_KEY
+```
 
+The generator loads `.env` automatically (no `python-dotenv` needed). The real
+`.env` is git-ignored — never commit it. If a variable is already exported in
+your shell, that value wins over the file.
+
+## Generating the cards
+
+Once you're in the environment (Nix shell or venv) and have your `.env`:
+
+```bash
 # Preview the layout with no AI calls / no cost:
 python generate_cards.py --placeholder
 
@@ -110,6 +120,7 @@ through from behind.
 - `generate_cards.py` — the generator (AI calls + PDF layout)
 - `commands.py` — the command list and deck definitions (edit to taste)
 - `flake.nix` — Nix dev shell; reads its package list from `requirements.txt`
+- `.env.example` — template for your API keys; copy to `.env` (git-ignored)
 - `.envrc` — optional direnv hook to auto-load the Nix shell
 - `requirements.txt` — the one dependency list, used by both pip and the flake
 - `cache/` — generated prompts and images (safe to delete to regenerate)

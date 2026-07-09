@@ -3,6 +3,9 @@
 __pycache__/
 *.pyc
 
+# Secrets
+.env
+
 # Nix / direnv
 result
 result-*

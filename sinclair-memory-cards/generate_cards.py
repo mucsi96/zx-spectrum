@@ -15,12 +15,14 @@ The cards are laid out 16 to an A4 page (4x4) with each group on its own page(s)
 so you can play with just the Simple deck first, then add the harder ones.
 
 Usage:
-    export ANTHROPIC_API_KEY=sk-ant-...
-    export OPENAI_API_KEY=sk-...
+    cp .env.example .env      # then put your ANTHROPIC_API_KEY / OPENAI_API_KEY in it
     python generate_cards.py                      # all three groups
     python generate_cards.py --groups simple      # just the easy deck
     python generate_cards.py --placeholder         # no API calls: preview the layout
     python generate_cards.py --skip-generation     # rebuild the PDF from the cache only
+
+Keys are read from a local .env file (or the real environment, which takes
+precedence).
 
 Model overrides (optional):
     CLAUDE_MODEL         (default: claude-opus-4-5)   any Claude Opus model id
@@ -75,6 +77,30 @@ CLAUDE_SYSTEM = (
 
 def slugify(cmd: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", cmd.lower()).strip("-")
+
+
+def load_dotenv(path: Path) -> None:
+    """Load KEY=VALUE lines from a .env file into the environment.
+
+    Deliberately tiny (no python-dotenv dependency). Real environment variables
+    always win — values from the file only fill in what is not already set.
+    """
+    if not path.exists():
+        return
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        key, sep, val = line.partition("=")
+        if not sep:
+            continue
+        key, val = key.strip(), val.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]
+        if key:
+            os.environ.setdefault(key, val)
 
 
 # --------------------------------------------------------------------------- #
@@ -280,6 +306,9 @@ def main() -> None:
     ap.add_argument("--skip-generation", action="store_true",
                     help="do not call any AI; build the PDF from whatever is already cached")
     args = ap.parse_args()
+
+    # Pick up ANTHROPIC_API_KEY / OPENAI_API_KEY from a local .env if present.
+    load_dotenv(HERE / ".env")
 
     # keep the group order stable regardless of argument order
     groups = [g for g in GROUP_ORDER if g in args.groups]
