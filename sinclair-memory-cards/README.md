@@ -15,9 +15,10 @@ vector-graphic art** in one consistent style across the whole deck.
 
 ## How the pictures are made (two AI steps per command)
 
-1. **Claude Opus** is asked, one command at a time, to invent a short
-   *image-generation prompt* describing a clear pictogram for that command.
-2. **OpenAI's image model** turns that prompt into a PNG.
+1. **GPT 5.5** is asked, one command at a time, to invent a short
+   *image-generation prompt* describing a clear pictogram for that command
+   (it already knows what each Sinclair BASIC command does).
+2. **Ideogram 4 Turbo** turns that prompt into a PNG.
 
 Both results are cached under `cache/` (prompts in `cache/prompts.json`, images in
 `cache/images/`), so re-running only does the work that is missing and you never
@@ -42,8 +43,8 @@ grid of squares). The only marking of the deck is one, two or three **small fain
 top-right corner — deliberately unobtrusive, just enough to sort the cards back into
 decks after cutting so you can play with the Simple deck on its own first.
 
-> The full deck is 88 commands = 176 cards, so a full run makes 88 Claude calls and
-> 88 image calls (all cached, so you only pay once). Generate one deck at a time with
+> The full deck is 88 commands = 176 cards, so a full run makes 88 GPT 5.5 calls and
+> 88 Ideogram calls (all cached, so you only pay once). Generate one deck at a time with
 > `--groups simple` if you'd rather spread out the cost.
 
 ## Setting up the environment
@@ -77,7 +78,7 @@ Copy `.env.example` to `.env` and fill in your keys:
 
 ```bash
 cp .env.example .env
-$EDITOR .env        # set ANTHROPIC_API_KEY and OPENAI_API_KEY
+$EDITOR .env        # set OPENAI_API_KEY and IDEOGRAM_API_KEY
 ```
 
 The generator loads `.env` automatically (no `python-dotenv` needed). The real
@@ -112,8 +113,9 @@ through from behind.
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `CLAUDE_MODEL` | `claude-opus-4-5` | Any Claude Opus model id (the latest Opus is a good choice). |
-| `OPENAI_IMAGE_MODEL` | `gpt-image-1` | Set to whichever OpenAI image model you have access to. |
+| `OPENAI_TEXT_MODEL` | `gpt-5.5` | The OpenAI model used to write each image prompt. |
+| `IDEOGRAM_URL` | `https://api.ideogram.ai/v1/ideogram-v4/generate` | Ideogram generate endpoint. |
+| `IDEOGRAM_RENDERING_SPEED` | `TURBO` | `TURBO`, `DEFAULT` or `QUALITY`. |
 
 ## Files
 

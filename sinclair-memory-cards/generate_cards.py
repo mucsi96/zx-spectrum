@@ -2,20 +2,20 @@
 """Generate a printable PDF of memory-game cards for Sinclair BASIC commands.
 
 For every command you get a *pair* of cards:
-  * a "word" card with the BASIC keyword and a child-friendly description
+  * a "word" card with just the BASIC keyword
   * a "picture" card with an AI-drawn pictogram of what the command does
 
-The picture for each command is produced in two AI steps, as requested:
-  1. Claude Opus is asked to invent a short image-generation prompt describing a
-     clear pictogram for that one command (one Claude call per command).
-  2. OpenAI's image model turns that prompt into a PNG (one image call per command).
+The picture for each command is produced in two AI steps:
+  1. GPT 5.5 is asked to invent a short image-generation prompt describing a clear
+     pictogram for that one command (it already knows what each command does).
+  2. Ideogram 4 Turbo turns that prompt into a PNG.
 
 Both steps are cached on disk, so re-running only does the work that is missing.
-The cards are laid out 16 to an A4 page (4x4) with each group on its own page(s),
-so you can play with just the Simple deck first, then add the harder ones.
+The cards are laid out 20 to an A4 page (4x5 squares); each deck flows across as
+many pages as it needs, so you can play with just the Simple deck first.
 
 Usage:
-    cp .env.example .env      # then put your ANTHROPIC_API_KEY / OPENAI_API_KEY in it
+    cp .env.example .env      # then put your OPENAI_API_KEY / IDEOGRAM_API_KEY in it
     python generate_cards.py                      # all three groups
     python generate_cards.py --groups simple      # just the easy deck
     python generate_cards.py --placeholder         # no API calls: preview the layout
@@ -24,14 +24,14 @@ Usage:
 Keys are read from a local .env file (or the real environment, which takes
 precedence).
 
-Model overrides (optional):
-    CLAUDE_MODEL         (default: claude-opus-4-5)   any Claude Opus model id
-    OPENAI_IMAGE_MODEL   (default: gpt-image-1)       OpenAI image model id
+Model / endpoint overrides (optional):
+    OPENAI_TEXT_MODEL         (default: gpt-5.5)
+    IDEOGRAM_URL              (default: https://api.ideogram.ai/v1/ideogram-v4/generate)
+    IDEOGRAM_RENDERING_SPEED  (default: TURBO)   TURBO | DEFAULT | QUALITY
 """
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 import re
@@ -51,8 +51,10 @@ CACHE_DIR = HERE / "cache"
 IMAGES_DIR = CACHE_DIR / "images"
 PROMPTS_FILE = CACHE_DIR / "prompts.json"
 
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-opus-4-5")
-OPENAI_IMAGE_MODEL = os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-1")
+OPENAI_TEXT_MODEL = os.environ.get("OPENAI_TEXT_MODEL", "gpt-5.5")
+IDEOGRAM_URL = os.environ.get(
+    "IDEOGRAM_URL", "https://api.ideogram.ai/v1/ideogram-v4/generate")
+IDEOGRAM_RENDERING_SPEED = os.environ.get("IDEOGRAM_RENDERING_SPEED", "TURBO")
 
 # Appended to every image prompt so the whole deck shares one look.
 STYLE_SUFFIX = (
@@ -63,13 +65,13 @@ STYLE_SUFFIX = (
     "no text, no letters, no numbers, no words anywhere in the image."
 )
 
-CLAUDE_SYSTEM = (
+PROMPT_SYSTEM = (
     "You design pictograms for a memory-matching card game that teaches a 7-year-old "
     "child the commands of Sinclair BASIC on the rubber-key ZX Spectrum. "
-    "For the single command you are given, invent ONE clear, literal picture that a "
-    "child could look at and instantly connect to what the command does. "
-    "It must be a concrete visual scene or object, not an abstract idea, and it must "
-    "not rely on any text, letters or numbers being drawn. "
+    "You will be given one Sinclair BASIC keyword. Recall what that command does, then "
+    "invent ONE clear, literal picture that a child could look at and instantly connect "
+    "to what the command does. It must be a concrete visual scene or object, not an "
+    "abstract idea, and it must not rely on any text, letters or numbers being drawn. "
     "Reply with ONLY the image-generation prompt: one or two vivid sentences describing "
     "exactly what should be drawn. Do not add explanations, quotes or a preamble."
 )
@@ -104,42 +106,43 @@ def load_dotenv(path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# AI step 1: Claude Opus invents the image prompt.
+# AI step 1: GPT 5.5 invents the image prompt.
 # --------------------------------------------------------------------------- #
-def get_image_prompt(client, info: dict) -> str:
-    user = (
-        f"Sinclair BASIC command: {info['cmd']}\n"
-        f"What it does: {info['does']}"
+def get_image_prompt(client, cmd: str) -> str:
+    resp = client.chat.completions.create(
+        model=OPENAI_TEXT_MODEL,
+        messages=[
+            {"role": "system", "content": PROMPT_SYSTEM},
+            {"role": "user", "content": f"Sinclair BASIC keyword: {cmd}"},
+        ],
     )
-    resp = client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=500,
-        system=CLAUDE_SYSTEM,
-        messages=[{"role": "user", "content": user}],
-    )
-    return "".join(b.text for b in resp.content if b.type == "text").strip()
+    return (resp.choices[0].message.content or "").strip()
 
 
 # --------------------------------------------------------------------------- #
-# AI step 2: OpenAI turns the prompt into a PNG.
+# AI step 2: Ideogram 4 Turbo turns the prompt into a PNG.
 # --------------------------------------------------------------------------- #
-def generate_image(client, prompt: str, out_path: Path) -> None:
-    result = client.images.generate(
-        model=OPENAI_IMAGE_MODEL,
-        prompt=prompt + STYLE_SUFFIX,
-        size="1024x1024",
-        n=1,
-    )
-    data = result.data[0]
-    if getattr(data, "b64_json", None):
-        img_bytes = base64.b64decode(data.b64_json)
-    elif getattr(data, "url", None):
-        import urllib.request
-        with urllib.request.urlopen(data.url) as r:
-            img_bytes = r.read()
-    else:
-        raise RuntimeError("Image API returned neither b64_json nor url")
-    out_path.write_bytes(img_bytes)
+def generate_image(prompt: str, out_path: Path, api_key: str) -> None:
+    import requests
+
+    # Ideogram v3/v4 generate endpoints take multipart/form-data; passing text
+    # fields via `files` (value tuple with a None filename) makes requests send
+    # multipart rather than urlencoded.
+    fields = {
+        "prompt": (None, prompt + STYLE_SUFFIX),
+        "rendering_speed": (None, IDEOGRAM_RENDERING_SPEED),
+        "aspect_ratio": (None, "1x1"),
+        "num_images": (None, "1"),
+        "magic_prompt": (None, "OFF"),
+    }
+    resp = requests.post(
+        IDEOGRAM_URL, headers={"Api-Key": api_key}, files=fields, timeout=180)
+    resp.raise_for_status()
+    url = resp.json()["data"][0]["url"]
+    # Ideogram image URLs are ephemeral — download the bytes right away.
+    img = requests.get(url, timeout=180)
+    img.raise_for_status()
+    out_path.write_bytes(img.content)
 
 
 def load_prompts() -> dict:
@@ -154,29 +157,28 @@ def save_prompts(prompts: dict) -> None:
 
 def generate_assets(groups: list[str]) -> dict:
     """Run the two AI steps for every command in the selected groups (cached)."""
-    import anthropic
     import openai
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        sys.exit("ANTHROPIC_API_KEY is not set (or use --placeholder to preview the layout).")
     if not os.environ.get("OPENAI_API_KEY"):
         sys.exit("OPENAI_API_KEY is not set (or use --placeholder to preview the layout).")
+    ideogram_key = os.environ.get("IDEOGRAM_API_KEY")
+    if not ideogram_key:
+        sys.exit("IDEOGRAM_API_KEY is not set (or use --placeholder to preview the layout).")
 
-    claude = anthropic.Anthropic()
     oai = openai.OpenAI()
 
     prompts = load_prompts()
     for group in groups:
-        for info in COMMANDS[group]:
-            slug = slugify(info["cmd"])
+        for cmd in COMMANDS[group]:
+            slug = slugify(cmd)
             if slug not in prompts:
-                print(f"  [Claude] prompt for {info['cmd']} ...")
-                prompts[slug] = get_image_prompt(claude, info)
+                print(f"  [GPT 5.5] prompt for {cmd} ...")
+                prompts[slug] = get_image_prompt(oai, cmd)
                 save_prompts(prompts)  # persist after each success
             img_path = IMAGES_DIR / f"{slug}.png"
             if not img_path.exists():
-                print(f"  [OpenAI] image for {info['cmd']} ...")
-                generate_image(oai, prompts[slug], img_path)
+                print(f"  [Ideogram] image for {cmd} ...")
+                generate_image(prompts[slug], img_path, ideogram_key)
     return prompts
 
 
@@ -203,21 +205,6 @@ def _fit_font(text: str, font: str, max_w: float, start: float, min_size: float 
     return size
 
 
-def _wrap(text: str, font: str, size: float, max_w: float) -> list[str]:
-    words, lines, cur = text.split(), [], ""
-    for w in words:
-        trial = f"{cur} {w}".strip()
-        if stringWidth(trial, font, size) <= max_w:
-            cur = trial
-        else:
-            if cur:
-                lines.append(cur)
-            cur = w
-    if cur:
-        lines.append(cur)
-    return lines
-
-
 def _deck_marks(c: canvas.Canvas, x: float, y: float, rank: int) -> None:
     """Small, faint dots in the top-right corner mark the deck without shouting:
     1 dot = Simple, 2 = Intermediate, 3 = Advanced. Only used for sorting cut cards."""
@@ -236,17 +223,16 @@ def draw_card_frame(c: canvas.Canvas, x: float, y: float, style: dict) -> None:
     _deck_marks(c, x, y, style["rank"])
 
 
-def draw_word_card(c: canvas.Canvas, x: float, y: float, info: dict, style: dict) -> None:
+def draw_word_card(c: canvas.Canvas, x: float, y: float, cmd: str, style: dict) -> None:
     """Just the command keyword, big and centred. Nothing else to read."""
     draw_card_frame(c, x, y, style)
-    keyword = info["cmd"]
-    size = _fit_font(keyword, "Helvetica-Bold", CARD - 7 * mm, 34)
+    size = _fit_font(cmd, "Helvetica-Bold", CARD - 7 * mm, 34)
     c.setFillColor(INK)
     c.setFont("Helvetica-Bold", size)
-    c.drawCentredString(x + CARD / 2, y + CARD / 2 - size * 0.34, keyword)
+    c.drawCentredString(x + CARD / 2, y + CARD / 2 - size * 0.34, cmd)
 
 
-def draw_picture_card(c: canvas.Canvas, x: float, y: float, info: dict, style: dict,
+def draw_picture_card(c: canvas.Canvas, x: float, y: float, cmd: str, style: dict,
                       img_path: Path | None) -> None:
     """Just the picture, filling the card."""
     draw_card_frame(c, x, y, style)
@@ -267,28 +253,28 @@ def draw_picture_card(c: canvas.Canvas, x: float, y: float, info: dict, style: d
         c.setFont("Helvetica-Oblique", 7)
         c.drawCentredString(x + CARD / 2, y + CARD / 2 + 1 * mm, "picture of")
         c.setFont("Helvetica-Bold", 10)
-        c.drawCentredString(x + CARD / 2, y + CARD / 2 - 4 * mm, info["cmd"])
+        c.drawCentredString(x + CARD / 2, y + CARD / 2 - 4 * mm, cmd)
 
 
 def build_pdf(groups: list[str], output: Path) -> None:
     c = canvas.Canvas(str(output), pagesize=A4)
     for group in groups:
         style = GROUP_STYLE[group]
-        cards = [("word", info) for info in COMMANDS[group]]
-        cards += [("pic", info) for info in COMMANDS[group]]
+        cards = [("word", cmd) for cmd in COMMANDS[group]]
+        cards += [("pic", cmd) for cmd in COMMANDS[group]]
 
         for page_start in range(0, len(cards), PER_PAGE):
             page_cards = cards[page_start:page_start + PER_PAGE]
-            for i, (kind, info) in enumerate(page_cards):
+            for i, (kind, cmd) in enumerate(page_cards):
                 col = i % COLS
                 row = i // COLS
                 x = MARGIN + col * (CARD + GUTTER)
                 y = PAGE_H - MARGIN - CARD - row * (CARD + GUTTER)
                 if kind == "word":
-                    draw_word_card(c, x, y, info, style)
+                    draw_word_card(c, x, y, cmd, style)
                 else:
-                    img_path = IMAGES_DIR / f"{slugify(info['cmd'])}.png"
-                    draw_picture_card(c, x, y, info, style, img_path)
+                    img_path = IMAGES_DIR / f"{slugify(cmd)}.png"
+                    draw_picture_card(c, x, y, cmd, style, img_path)
             c.showPage()
     c.save()
 
@@ -307,7 +293,7 @@ def main() -> None:
                     help="do not call any AI; build the PDF from whatever is already cached")
     args = ap.parse_args()
 
-    # Pick up ANTHROPIC_API_KEY / OPENAI_API_KEY from a local .env if present.
+    # Pick up OPENAI_API_KEY / IDEOGRAM_API_KEY from a local .env if present.
     load_dotenv(HERE / ".env")
 
     # keep the group order stable regardless of argument order
@@ -317,7 +303,7 @@ def main() -> None:
     IMAGES_DIR.mkdir(exist_ok=True)
 
     if not (args.placeholder or args.skip_generation):
-        print("Generating pictograms (Claude prompt -> OpenAI image, cached):")
+        print("Generating pictograms (GPT 5.5 prompt -> Ideogram 4 Turbo image, cached):")
         generate_assets(groups)
 
     print(f"Building PDF: {args.output}")
