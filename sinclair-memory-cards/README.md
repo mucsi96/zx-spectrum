@@ -116,6 +116,7 @@ through from behind.
 | `OPENAI_TEXT_MODEL` | `gpt-5.5` | The OpenAI model used to write each image prompt. |
 | `IDEOGRAM_URL` | `https://api.ideogram.ai/v1/ideogram-v4/generate` | Ideogram generate endpoint. |
 | `IDEOGRAM_RENDERING_SPEED` | `TURBO` | `TURBO`, `DEFAULT` or `QUALITY`. |
+| `IDEOGRAM_ASPECT_RATIO` | *(unset)* | Only sent when set; e.g. `1x1` for square pictures. |
 
 ## Files
 

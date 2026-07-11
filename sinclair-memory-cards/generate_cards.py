@@ -55,6 +55,9 @@ OPENAI_TEXT_MODEL = os.environ.get("OPENAI_TEXT_MODEL", "gpt-5.5")
 IDEOGRAM_URL = os.environ.get(
     "IDEOGRAM_URL", "https://api.ideogram.ai/v1/ideogram-v4/generate")
 IDEOGRAM_RENDERING_SPEED = os.environ.get("IDEOGRAM_RENDERING_SPEED", "TURBO")
+# Optional; only sent when set. Ideogram v4 uses the WxH form, e.g. "1x1".
+# Left unset by default (the model picks a ratio) to keep the request minimal.
+IDEOGRAM_ASPECT_RATIO = os.environ.get("IDEOGRAM_ASPECT_RATIO", "")
 
 # Appended to every image prompt so the whole deck shares one look.
 STYLE_SUFFIX = (
@@ -127,20 +130,27 @@ def generate_image(prompt: str, out_path: Path, api_key: str) -> None:
 
     # Ideogram v3/v4 generate endpoints take multipart/form-data; passing text
     # fields via `files` (value tuple with a None filename) makes requests send
-    # multipart rather than urlencoded.
+    # multipart rather than urlencoded. Keep the request minimal — only the two
+    # fields we rely on — and add aspect_ratio only when explicitly configured.
     fields = {
         "prompt": (None, prompt + STYLE_SUFFIX),
         "rendering_speed": (None, IDEOGRAM_RENDERING_SPEED),
-        "aspect_ratio": (None, "1x1"),
-        "num_images": (None, "1"),
-        "magic_prompt": (None, "OFF"),
     }
+    if IDEOGRAM_ASPECT_RATIO:
+        fields["aspect_ratio"] = (None, IDEOGRAM_ASPECT_RATIO)
+
     resp = requests.post(
         IDEOGRAM_URL, headers={"Api-Key": api_key}, files=fields, timeout=180)
-    resp.raise_for_status()
-    url = resp.json()["data"][0]["url"]
+    if resp.status_code >= 400:
+        # Surface Ideogram's message so a bad field/value is obvious.
+        raise RuntimeError(f"Ideogram {resp.status_code} at {IDEOGRAM_URL}: {resp.text}")
+
+    data = (resp.json() or {}).get("data") or []
+    if not data or not data[0].get("url"):
+        raise RuntimeError(f"Ideogram returned no image URL: {resp.text}")
+
     # Ideogram image URLs are ephemeral — download the bytes right away.
-    img = requests.get(url, timeout=180)
+    img = requests.get(data[0]["url"], timeout=180)
     img.raise_for_status()
     out_path.write_bytes(img.content)
 
