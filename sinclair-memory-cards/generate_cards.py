@@ -55,9 +55,9 @@ OPENAI_TEXT_MODEL = os.environ.get("OPENAI_TEXT_MODEL", "gpt-5.5")
 IDEOGRAM_URL = os.environ.get(
     "IDEOGRAM_URL", "https://api.ideogram.ai/v1/ideogram-v4/generate")
 IDEOGRAM_RENDERING_SPEED = os.environ.get("IDEOGRAM_RENDERING_SPEED", "TURBO")
-# Optional; only sent when set. Ideogram v4 uses the WxH form, e.g. "1x1".
-# Left unset by default (the model picks a ratio) to keep the request minimal.
-IDEOGRAM_ASPECT_RATIO = os.environ.get("IDEOGRAM_ASPECT_RATIO", "")
+# Ideogram v4 aspect_ratio uses the WxH form; "1x1" is square (our default, since
+# the cards are square). Set to empty to let the model pick a ratio (defaults to AUTO).
+IDEOGRAM_ASPECT_RATIO = os.environ.get("IDEOGRAM_ASPECT_RATIO", "1x1")
 
 # Appended to every image prompt so the whole deck shares one look.
 STYLE_SUFFIX = (
