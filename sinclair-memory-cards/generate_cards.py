@@ -133,7 +133,7 @@ def generate_image(prompt: str, out_path: Path, api_key: str) -> None:
     # multipart rather than urlencoded. Keep the request minimal — only the two
     # fields we rely on — and add aspect_ratio only when explicitly configured.
     fields = {
-        "prompt": (None, prompt + STYLE_SUFFIX),
+        "text_prompt": (None, prompt + STYLE_SUFFIX),
         "rendering_speed": (None, IDEOGRAM_RENDERING_SPEED),
     }
     if IDEOGRAM_ASPECT_RATIO:
