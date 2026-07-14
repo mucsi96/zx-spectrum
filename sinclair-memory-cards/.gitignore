@@ -13,4 +13,5 @@ result-*
 
 # Generated output and AI cache
 cache/
+cache_old/
 *.pdf
