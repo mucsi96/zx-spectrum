@@ -44,18 +44,10 @@ keyword printed on the rubber-key keyboard in **white** (keyword mode), **green*
 `<=` `>=` `<>` and pure punctuation are left out, as they aren't named commands.
 Pass `--all` to print the entire catalog instead of scanning the programs.
 
-Found commands are split into three decks so the easy ones can be played alone:
-
-| Deck | Corner mark | Contains (when used in a program) |
-|------|-------------|-----------------------------------|
-| **Simple** — typed every session, plus colour & sound | 1 dot | `PRINT` `LET` `INPUT` `RUN` `LIST` `CLS` `NEW` `GOTO` `GOSUB` `RETURN` `IF` `THEN` `FOR` `TO` `STEP` `NEXT` `PAUSE` `STOP` `REM` `BORDER` `PAPER` `INK` `FLASH` `BRIGHT` `INVERSE` `OVER` `BEEP` `CLEAR` `CONTINUE` `COPY` `LOAD` `SAVE` |
-| **Intermediate** — graphics, data, printer, files, common functions | 2 dots | `PLOT` `DRAW` `CIRCLE` `POKE` `PEEK` `DIM` `DATA` `READ` `RESTORE` `RANDOMIZE` `AT` `TAB` `LINE` `LPRINT` `LLIST` `LEN` `STR$` `VAL` `VAL$` `CHR$` `CODE` `RND` `INKEY$` `AND` `OR` `NOT` `DEF FN` `FN` `MERGE` `VERIFY` `CAT` `FORMAT` `MOVE` `ERASE` `OPEN #` `CLOSE #` `IN` `OUT` |
-| **Advanced** — maths & machine functions | 3 dots | `SIN` `COS` `TAN` `ASN` `ACS` `ATN` `LN` `EXP` `INT` `SQR` `SGN` `ABS` `PI` `USR` `BIN` `POINT` `SCREEN$` `ATTR` |
-
-Each deck flows across as many A4 pages as it needs (20 cards to a page, in a 4×5
-grid of squares). The only marking of the deck is one, two or three **small faint dots** in the
-top-right corner — deliberately unobtrusive, just enough to sort the cards back into
-decks after cutting so you can play with the Simple deck on its own first.
+Since the programs themselves decide which commands appear, there is no grouping
+into difficulty decks — the set is already exactly the commands worth learning
+right now. Cards are printed in the catalog's teaching order, 20 to an A4 page
+in a 4×5 grid of squares, across as many pages as needed.
 
 > One GPT 5.5 call + one Ideogram call per command, both cached — so you only ever
 > pay for a command's picture once, no matter how many times you re-run.
@@ -109,9 +101,6 @@ python generate_cards.py --placeholder
 # Generate cards for the commands used in ../programs (the default):
 python generate_cards.py
 
-# Just the easy deck:
-python generate_cards.py --groups simple
-
 # The full keyboard catalog instead of scanning the programs:
 python generate_cards.py --all
 
@@ -140,7 +129,7 @@ through from behind.
 ## Files
 
 - `generate_cards.py` — the generator (program scanning + AI calls + PDF layout)
-- `commands.py` — the keyword catalog and deck definitions (edit to taste)
+- `commands.py` — the keyword catalog (edit to taste)
 - `flake.nix` — Nix dev shell; reads its package list from `requirements.txt`
 - `.env.example` — template for your API keys; copy to `.env` (git-ignored)
 - `.envrc` — optional direnv hook to auto-load the Nix shell

@@ -18,14 +18,12 @@ The picture for each command is produced in two AI steps:
 
 Both steps are cached on disk, so re-running only does the work that is missing —
 adding a new program later only generates cards for its newly-used commands.
-The cards are laid out 20 to an A4 page (4x5 squares); each deck flows across as
-many pages as it needs, so you can play with just the Simple deck first.
+The cards are laid out 20 to an A4 page (4x5 squares).
 
 Usage:
     cp .env.example .env      # then put your OPENAI_API_KEY / IDEOGRAM_API_KEY in it
     python generate_cards.py                      # commands used in programs/
     python generate_cards.py --all                # the full keyword catalog
-    python generate_cards.py --groups simple      # only the easy deck
     python generate_cards.py --programs ../progs  # scan a different folder
     python generate_cards.py --placeholder         # no API calls: preview the layout
     python generate_cards.py --skip-generation     # rebuild the PDF from the cache only
@@ -37,6 +35,7 @@ Model / endpoint overrides (optional):
     OPENAI_TEXT_MODEL         (default: gpt-5.5)
     IDEOGRAM_URL              (default: https://api.ideogram.ai/v1/ideogram-v4/generate)
     IDEOGRAM_RENDERING_SPEED  (default: TURBO)   TURBO | DEFAULT | QUALITY
+    IDEOGRAM_ASPECT_RATIO     (default: 1x1)     square pictures for square cards
 """
 from __future__ import annotations
 
@@ -53,7 +52,7 @@ from reportlab.lib.colors import HexColor
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase.pdfmetrics import stringWidth
 
-from commands import COMMANDS, GROUP_STYLE, GROUP_ORDER
+from commands import KEYWORDS
 
 HERE = Path(__file__).resolve().parent
 CACHE_DIR = HERE / "cache"
@@ -130,8 +129,7 @@ def _keyword_regex(kw: str) -> re.Pattern:
     return re.compile(pat, re.IGNORECASE)
 
 
-KEYWORD_REGEXES = [(cmd, _keyword_regex(cmd))
-                   for group in GROUP_ORDER for cmd in COMMANDS[group]]
+KEYWORD_REGEXES = [(cmd, _keyword_regex(cmd)) for cmd in KEYWORDS]
 _REM = re.compile(r"\bREM\b", re.IGNORECASE)
 
 
@@ -170,17 +168,6 @@ def extract_used_commands(programs_dir: Path) -> set[str]:
     return used
 
 
-def build_deck(groups: list[str], used: set[str] | None) -> dict[str, list[str]]:
-    """Per selected group, the commands to print (catalog order), optionally
-    filtered down to the ones actually used in the programs."""
-    deck = {}
-    for group in groups:
-        cmds = [c for c in COMMANDS[group] if used is None or c in used]
-        if cmds:
-            deck[group] = cmds
-    return deck
-
-
 # --------------------------------------------------------------------------- #
 # AI step 1: GPT 5.5 invents the image prompt.
 # --------------------------------------------------------------------------- #
@@ -203,8 +190,8 @@ def generate_image(prompt: str, out_path: Path, api_key: str) -> None:
 
     # Ideogram v3/v4 generate endpoints take multipart/form-data; passing text
     # fields via `files` (value tuple with a None filename) makes requests send
-    # multipart rather than urlencoded. Keep the request minimal — only the two
-    # fields we rely on — and add aspect_ratio only when explicitly configured.
+    # multipart rather than urlencoded. Keep the request minimal — only the
+    # fields we rely on.
     fields = {
         "text_prompt": (None, prompt + STYLE_SUFFIX),
         "rendering_speed": (None, IDEOGRAM_RENDERING_SPEED),
@@ -238,8 +225,8 @@ def save_prompts(prompts: dict) -> None:
     PROMPTS_FILE.write_text(json.dumps(prompts, indent=2, ensure_ascii=False))
 
 
-def generate_assets(deck: dict[str, list[str]]) -> dict:
-    """Run the two AI steps for every command in the deck (cached)."""
+def generate_assets(cmds: list[str]) -> dict:
+    """Run the two AI steps for every command (cached)."""
     import openai
 
     if not os.environ.get("OPENAI_API_KEY"):
@@ -251,17 +238,16 @@ def generate_assets(deck: dict[str, list[str]]) -> dict:
     oai = openai.OpenAI()
 
     prompts = load_prompts()
-    for cmds in deck.values():
-        for cmd in cmds:
-            slug = slugify(cmd)
-            if slug not in prompts:
-                print(f"  [GPT 5.5] prompt for {cmd} ...")
-                prompts[slug] = get_image_prompt(oai, cmd)
-                save_prompts(prompts)  # persist after each success
-            img_path = IMAGES_DIR / f"{slug}.png"
-            if not img_path.exists():
-                print(f"  [Ideogram] image for {cmd} ...")
-                generate_image(prompts[slug], img_path, ideogram_key)
+    for cmd in cmds:
+        slug = slugify(cmd)
+        if slug not in prompts:
+            print(f"  [GPT 5.5] prompt for {cmd} ...")
+            prompts[slug] = get_image_prompt(oai, cmd)
+            save_prompts(prompts)  # persist after each success
+        img_path = IMAGES_DIR / f"{slug}.png"
+        if not img_path.exists():
+            print(f"  [Ideogram] image for {cmd} ...")
+            generate_image(prompts[slug], img_path, ideogram_key)
     return prompts
 
 
@@ -272,7 +258,6 @@ PAGE_W, PAGE_H = A4
 MARGIN = 10 * mm
 GUTTER = 4 * mm
 COLS = 4
-# Square cards, so more rows fit down the page than the old tall cards.
 CARD = (PAGE_W - 2 * MARGIN - (COLS - 1) * GUTTER) / COLS
 ROWS = int((PAGE_H - 2 * MARGIN + GUTTER) // (CARD + GUTTER))
 PER_PAGE = COLS * ROWS
@@ -288,37 +273,26 @@ def _fit_font(text: str, font: str, max_w: float, start: float, min_size: float 
     return size
 
 
-def _deck_marks(c: canvas.Canvas, x: float, y: float, rank: int) -> None:
-    """Small, faint dots in the top-right corner mark the deck without shouting:
-    1 dot = Simple, 2 = Intermediate, 3 = Advanced. Only used for sorting cut cards."""
-    r, gap = 0.9 * mm, 1.5 * mm
-    c.setFillColor(HexColor("#B0B0B0"))
-    for i in range(rank):
-        cx = x + CARD - 3.5 * mm - i * gap
-        c.circle(cx, y + CARD - 3.5 * mm, r, stroke=0, fill=1)
-
-
-def draw_card_frame(c: canvas.Canvas, x: float, y: float, style: dict) -> None:
+def draw_card_frame(c: canvas.Canvas, x: float, y: float) -> None:
     c.setLineWidth(1.2)
     c.setStrokeColor(INK)
     c.setFillColor(HexColor("#FFFFFF"))
     c.rect(x, y, CARD, CARD, stroke=1, fill=1)  # square, sharp corners
-    _deck_marks(c, x, y, style["rank"])
 
 
-def draw_word_card(c: canvas.Canvas, x: float, y: float, cmd: str, style: dict) -> None:
+def draw_word_card(c: canvas.Canvas, x: float, y: float, cmd: str) -> None:
     """Just the command keyword, big and centred. Nothing else to read."""
-    draw_card_frame(c, x, y, style)
+    draw_card_frame(c, x, y)
     size = _fit_font(cmd, "Helvetica-Bold", CARD - 7 * mm, 34)
     c.setFillColor(INK)
     c.setFont("Helvetica-Bold", size)
     c.drawCentredString(x + CARD / 2, y + CARD / 2 - size * 0.34, cmd)
 
 
-def draw_picture_card(c: canvas.Canvas, x: float, y: float, cmd: str, style: dict,
+def draw_picture_card(c: canvas.Canvas, x: float, y: float, cmd: str,
                       img_path: Path | None) -> None:
     """Just the picture, filling the card."""
-    draw_card_frame(c, x, y, style)
+    draw_card_frame(c, x, y)
     pad = 3.5 * mm
     box_x, box_y = x + pad, y + pad
     box = CARD - 2 * pad
@@ -339,26 +313,22 @@ def draw_picture_card(c: canvas.Canvas, x: float, y: float, cmd: str, style: dic
         c.drawCentredString(x + CARD / 2, y + CARD / 2 - 4 * mm, cmd)
 
 
-def build_pdf(deck: dict[str, list[str]], output: Path) -> None:
+def build_pdf(cmds: list[str], output: Path) -> None:
     c = canvas.Canvas(str(output), pagesize=A4)
-    for group, cmds in deck.items():
-        style = GROUP_STYLE[group]
-        cards = [("word", cmd) for cmd in cmds]
-        cards += [("pic", cmd) for cmd in cmds]
+    cards = [("word", cmd) for cmd in cmds] + [("pic", cmd) for cmd in cmds]
 
-        for page_start in range(0, len(cards), PER_PAGE):
-            page_cards = cards[page_start:page_start + PER_PAGE]
-            for i, (kind, cmd) in enumerate(page_cards):
-                col = i % COLS
-                row = i // COLS
-                x = MARGIN + col * (CARD + GUTTER)
-                y = PAGE_H - MARGIN - CARD - row * (CARD + GUTTER)
-                if kind == "word":
-                    draw_word_card(c, x, y, cmd, style)
-                else:
-                    img_path = IMAGES_DIR / f"{slugify(cmd)}.png"
-                    draw_picture_card(c, x, y, cmd, style, img_path)
-            c.showPage()
+    for page_start in range(0, len(cards), PER_PAGE):
+        page_cards = cards[page_start:page_start + PER_PAGE]
+        for i, (kind, cmd) in enumerate(page_cards):
+            col = i % COLS
+            row = i // COLS
+            x = MARGIN + col * (CARD + GUTTER)
+            y = PAGE_H - MARGIN - CARD - row * (CARD + GUTTER)
+            if kind == "word":
+                draw_word_card(c, x, y, cmd)
+            else:
+                draw_picture_card(c, x, y, cmd, IMAGES_DIR / f"{slugify(cmd)}.png")
+        c.showPage()
     c.save()
 
 
@@ -366,8 +336,6 @@ def build_pdf(deck: dict[str, list[str]], output: Path) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--groups", nargs="+", choices=GROUP_ORDER, default=GROUP_ORDER,
-                    help="which difficulty groups to include (default: all)")
     ap.add_argument("--programs", type=Path, default=PROGRAMS_DIR,
                     help="folder of .bas programs to scan (default: ../programs)")
     ap.add_argument("--all", action="store_true",
@@ -383,25 +351,22 @@ def main() -> None:
     # Pick up OPENAI_API_KEY / IDEOGRAM_API_KEY from a local .env if present.
     load_dotenv(HERE / ".env")
 
-    # keep the group order stable regardless of argument order
-    groups = [g for g in GROUP_ORDER if g in args.groups]
-
-    used = None if args.all else extract_used_commands(args.programs)
-    deck = build_deck(groups, used)
-    if not deck:
-        sys.exit("Nothing to print: the selected groups contain no used commands.")
-    for group, cmds in deck.items():
-        print(f"{GROUP_STYLE[group]['label']}: {len(cmds)} command(s) — {', '.join(cmds)}")
+    if args.all:
+        cmds = list(KEYWORDS)
+    else:
+        used = extract_used_commands(args.programs)
+        cmds = [c for c in KEYWORDS if c in used]  # keep catalog (teaching) order
+    print(f"{len(cmds)} command(s): {', '.join(cmds)}")
 
     CACHE_DIR.mkdir(exist_ok=True)
     IMAGES_DIR.mkdir(exist_ok=True)
 
     if not (args.placeholder or args.skip_generation):
         print("Generating pictograms (GPT 5.5 prompt -> Ideogram 4 Turbo image, cached):")
-        generate_assets(deck)
+        generate_assets(cmds)
 
     print(f"Building PDF: {args.output}")
-    build_pdf(deck, args.output)
+    build_pdf(cmds, args.output)
     print("Done. Print at 100% / actual size (no 'fit to page') and cut along the card borders.")
 
 
