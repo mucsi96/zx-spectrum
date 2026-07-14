@@ -1,15 +1,19 @@
 """Sinclair BASIC keywords of the rubber-key 48K ZX Spectrum, grouped by difficulty.
 
-This is the full set of *named* keyword tokens printed on the keyboard in white
+This is the *catalog* of every named keyword token printed on the keyboard in white
 (keyword mode), green (extended mode) and red (symbol shift / extended-symbol shift).
 Only the bare comparison glyphs (<=, >=, <>) and pure punctuation symbols are left
 out, since they are not named commands and do not work as a picture.
 
-Just the keyword names are listed here — the image-prompt model (GPT 5.5) already
-knows what each Sinclair BASIC command does, so no descriptions are needed.
+The generator does NOT print a card for every keyword here. It scans the BASIC
+programs in the repository's programs/ folder and makes cards only for the keywords
+actually used there — this catalog is what it recognises keywords against, and what
+assigns each found keyword to a deck. (Use --all to print the whole catalog.)
 
-The decks let you play with a subset. They are ordered by how useful/approachable
-a command is for a young beginner, not by keyboard colour:
+Just the keyword names are listed — the image-prompt model (GPT 5.5) already knows
+what each Sinclair BASIC command does, so no descriptions are needed.
+
+Deck grouping is by how useful/approachable a command is for a young beginner:
   simple       - the commands you type every session, plus colour and sound
   intermediate - graphics, data, sequences, the printer, files and common functions
   advanced     - the maths and machine-level functions (rarely needed by a beginner)

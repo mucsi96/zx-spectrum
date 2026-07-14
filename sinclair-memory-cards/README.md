@@ -3,6 +3,13 @@
 Generates a printable **PDF of memory-game cards** that teach a young child (≈7)
 the Sinclair BASIC commands of the rubber-key ZX Spectrum.
 
+The card set is driven by the programs we actually write: the script scans the
+BASIC programs in the repository's [`programs/`](../programs) folder, extracts the
+unique Sinclair BASIC keywords used in them, and makes cards **only for those** —
+so the learning starts with the commands that really come up, not the whole
+keyboard at random. Add a new program and re-run: cards for its newly-used
+commands are added (everything already generated is cached).
+
 Each command becomes a **matching pair**:
 
 - a **word card** — just the BASIC keyword (`PRINT`, `BEEP`, `CIRCLE`, …), big and clear, and
@@ -24,16 +31,23 @@ Both results are cached under `cache/` (prompts in `cache/prompts.json`, images 
 `cache/images/`), so re-running only does the work that is missing and you never
 pay for the same picture twice.
 
-## Groups
+## Which commands get cards
 
-Every named keyword printed on the rubber-key keyboard in **white** (keyword mode),
-**green** (extended mode) and **red** (symbol shift) is included — the full Sinclair
-BASIC command set (the bare comparison glyphs `<=` `>=` `<>` and pure punctuation
-are the only things left out, as they aren't named commands). They are split into
-three decks so you can start small and add harder cards later:
+By default: **the keywords used in `programs/*.bas`**. The scanner understands
+real Spectrum listings — it ignores line numbers, text inside `"strings"` and
+`REM` comments, and recognises `GO TO` / `GO SUB` (as the keyboard spells them)
+as `GOTO` / `GOSUB`.
 
-| Deck | Corner mark | Commands |
-|------|-------------|----------|
+Recognition happens against the full catalog in `commands.py` — every named
+keyword printed on the rubber-key keyboard in **white** (keyword mode), **green**
+(extended mode) and **red** (symbol shift); only the bare comparison glyphs
+`<=` `>=` `<>` and pure punctuation are left out, as they aren't named commands.
+Pass `--all` to print the entire catalog instead of scanning the programs.
+
+Found commands are split into three decks so the easy ones can be played alone:
+
+| Deck | Corner mark | Contains (when used in a program) |
+|------|-------------|-----------------------------------|
 | **Simple** — typed every session, plus colour & sound | 1 dot | `PRINT` `LET` `INPUT` `RUN` `LIST` `CLS` `NEW` `GOTO` `GOSUB` `RETURN` `IF` `THEN` `FOR` `TO` `STEP` `NEXT` `PAUSE` `STOP` `REM` `BORDER` `PAPER` `INK` `FLASH` `BRIGHT` `INVERSE` `OVER` `BEEP` `CLEAR` `CONTINUE` `COPY` `LOAD` `SAVE` |
 | **Intermediate** — graphics, data, printer, files, common functions | 2 dots | `PLOT` `DRAW` `CIRCLE` `POKE` `PEEK` `DIM` `DATA` `READ` `RESTORE` `RANDOMIZE` `AT` `TAB` `LINE` `LPRINT` `LLIST` `LEN` `STR$` `VAL` `VAL$` `CHR$` `CODE` `RND` `INKEY$` `AND` `OR` `NOT` `DEF FN` `FN` `MERGE` `VERIFY` `CAT` `FORMAT` `MOVE` `ERASE` `OPEN #` `CLOSE #` `IN` `OUT` |
 | **Advanced** — maths & machine functions | 3 dots | `SIN` `COS` `TAN` `ASN` `ACS` `ATN` `LN` `EXP` `INT` `SQR` `SGN` `ABS` `PI` `USR` `BIN` `POINT` `SCREEN$` `ATTR` |
@@ -43,9 +57,8 @@ grid of squares). The only marking of the deck is one, two or three **small fain
 top-right corner — deliberately unobtrusive, just enough to sort the cards back into
 decks after cutting so you can play with the Simple deck on its own first.
 
-> The full deck is 88 commands = 176 cards, so a full run makes 88 GPT 5.5 calls and
-> 88 Ideogram calls (all cached, so you only pay once). Generate one deck at a time with
-> `--groups simple` if you'd rather spread out the cost.
+> One GPT 5.5 call + one Ideogram call per command, both cached — so you only ever
+> pay for a command's picture once, no matter how many times you re-run.
 
 ## Setting up the environment
 
@@ -93,11 +106,17 @@ Once you're in the environment (Nix shell or venv) and have your `.env`:
 # Preview the layout with no AI calls / no cost:
 python generate_cards.py --placeholder
 
-# Generate the real cards (all three decks):
+# Generate cards for the commands used in ../programs (the default):
 python generate_cards.py
 
 # Just the easy deck:
 python generate_cards.py --groups simple
+
+# The full keyboard catalog instead of scanning the programs:
+python generate_cards.py --all
+
+# Scan a different folder of .bas files:
+python generate_cards.py --programs /path/to/programs
 
 # Rebuild the PDF from the cache without calling any AI again:
 python generate_cards.py --skip-generation
@@ -120,8 +139,8 @@ through from behind.
 
 ## Files
 
-- `generate_cards.py` — the generator (AI calls + PDF layout)
-- `commands.py` — the command list and deck definitions (edit to taste)
+- `generate_cards.py` — the generator (program scanning + AI calls + PDF layout)
+- `commands.py` — the keyword catalog and deck definitions (edit to taste)
 - `flake.nix` — Nix dev shell; reads its package list from `requirements.txt`
 - `.env.example` — template for your API keys; copy to `.env` (git-ignored)
 - `.envrc` — optional direnv hook to auto-load the Nix shell

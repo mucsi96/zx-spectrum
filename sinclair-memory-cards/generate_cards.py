@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Generate a printable PDF of memory-game cards for Sinclair BASIC commands.
 
+The card set is driven by the programs you actually write: the script scans the
+BASIC programs in the repository's programs/ folder, extracts the unique Sinclair
+BASIC keywords used in them, and makes cards only for those — so the child learns
+the commands they really use, not the whole keyboard at random. (Pass --all to
+print the entire keyword catalog instead.)
+
 For every command you get a *pair* of cards:
   * a "word" card with just the BASIC keyword
   * a "picture" card with an AI-drawn pictogram of what the command does
@@ -10,14 +16,17 @@ The picture for each command is produced in two AI steps:
      pictogram for that one command (it already knows what each command does).
   2. Ideogram 4 Turbo turns that prompt into a PNG.
 
-Both steps are cached on disk, so re-running only does the work that is missing.
+Both steps are cached on disk, so re-running only does the work that is missing —
+adding a new program later only generates cards for its newly-used commands.
 The cards are laid out 20 to an A4 page (4x5 squares); each deck flows across as
 many pages as it needs, so you can play with just the Simple deck first.
 
 Usage:
     cp .env.example .env      # then put your OPENAI_API_KEY / IDEOGRAM_API_KEY in it
-    python generate_cards.py                      # all three groups
-    python generate_cards.py --groups simple      # just the easy deck
+    python generate_cards.py                      # commands used in programs/
+    python generate_cards.py --all                # the full keyword catalog
+    python generate_cards.py --groups simple      # only the easy deck
+    python generate_cards.py --programs ../progs  # scan a different folder
     python generate_cards.py --placeholder         # no API calls: preview the layout
     python generate_cards.py --skip-generation     # rebuild the PDF from the cache only
 
@@ -50,6 +59,7 @@ HERE = Path(__file__).resolve().parent
 CACHE_DIR = HERE / "cache"
 IMAGES_DIR = CACHE_DIR / "images"
 PROMPTS_FILE = CACHE_DIR / "prompts.json"
+PROGRAMS_DIR = HERE.parent / "programs"
 
 OPENAI_TEXT_MODEL = os.environ.get("OPENAI_TEXT_MODEL", "gpt-5.5")
 IDEOGRAM_URL = os.environ.get(
@@ -109,6 +119,69 @@ def load_dotenv(path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Extract the keywords actually used in the BASIC programs.
+# --------------------------------------------------------------------------- #
+def _keyword_regex(kw: str) -> re.Pattern:
+    """Regex matching one catalog keyword as a whole token in a BASIC line."""
+    esc = re.escape(kw).replace(r"\ ", r"\s*")  # "DEF FN" -> DEF\s*FN, "OPEN #" -> OPEN\s*\#
+    pat = r"\b" + esc
+    if kw[-1].isalnum():
+        pat += r"(?![\w$])"  # whole word only; also stops VAL matching inside VAL$
+    return re.compile(pat, re.IGNORECASE)
+
+
+KEYWORD_REGEXES = [(cmd, _keyword_regex(cmd))
+                   for group in GROUP_ORDER for cmd in COMMANDS[group]]
+_REM = re.compile(r"\bREM\b", re.IGNORECASE)
+
+
+def keywords_in_source(text: str) -> set[str]:
+    """Return the catalog keywords used in one BASIC program's source."""
+    found: set[str] = set()
+    for line in text.splitlines():
+        line = re.sub(r"^\s*\d+\s*", "", line)        # line number
+        line = re.sub(r'"[^"]*"', " ", line)          # string literals (free text)
+        # The Spectrum keyboard spells these as two words; the catalog as one.
+        line = re.sub(r"\bGO\s+TO\b", "GOTO", line, flags=re.IGNORECASE)
+        line = re.sub(r"\bGO\s+SUB\b", "GOSUB", line, flags=re.IGNORECASE)
+        m = _REM.search(line)
+        if m:                                          # rest of line is a comment
+            found.add("REM")
+            line = line[:m.start()]
+        for cmd, rx in KEYWORD_REGEXES:
+            if cmd not in found and rx.search(line):
+                found.add(cmd)
+    return found
+
+
+def extract_used_commands(programs_dir: Path) -> set[str]:
+    """Scan every *.bas program and return the union of keywords they use."""
+    sources = sorted(p for p in programs_dir.glob("*")
+                     if p.suffix.lower() == ".bas" and p.is_file())
+    if not sources:
+        sys.exit(f"No .bas programs found in {programs_dir} — add some, or use --all "
+                 f"for the full keyword catalog.")
+    used: set[str] = set()
+    for src in sources:
+        used |= keywords_in_source(src.read_text(encoding="utf-8", errors="replace"))
+    print(f"Scanned {len(sources)} program(s) in {programs_dir}:")
+    for src in sources:
+        print(f"  - {src.name}")
+    return used
+
+
+def build_deck(groups: list[str], used: set[str] | None) -> dict[str, list[str]]:
+    """Per selected group, the commands to print (catalog order), optionally
+    filtered down to the ones actually used in the programs."""
+    deck = {}
+    for group in groups:
+        cmds = [c for c in COMMANDS[group] if used is None or c in used]
+        if cmds:
+            deck[group] = cmds
+    return deck
+
+
+# --------------------------------------------------------------------------- #
 # AI step 1: GPT 5.5 invents the image prompt.
 # --------------------------------------------------------------------------- #
 def get_image_prompt(client, cmd: str) -> str:
@@ -165,8 +238,8 @@ def save_prompts(prompts: dict) -> None:
     PROMPTS_FILE.write_text(json.dumps(prompts, indent=2, ensure_ascii=False))
 
 
-def generate_assets(groups: list[str]) -> dict:
-    """Run the two AI steps for every command in the selected groups (cached)."""
+def generate_assets(deck: dict[str, list[str]]) -> dict:
+    """Run the two AI steps for every command in the deck (cached)."""
     import openai
 
     if not os.environ.get("OPENAI_API_KEY"):
@@ -178,8 +251,8 @@ def generate_assets(groups: list[str]) -> dict:
     oai = openai.OpenAI()
 
     prompts = load_prompts()
-    for group in groups:
-        for cmd in COMMANDS[group]:
+    for cmds in deck.values():
+        for cmd in cmds:
             slug = slugify(cmd)
             if slug not in prompts:
                 print(f"  [GPT 5.5] prompt for {cmd} ...")
@@ -266,12 +339,12 @@ def draw_picture_card(c: canvas.Canvas, x: float, y: float, cmd: str, style: dic
         c.drawCentredString(x + CARD / 2, y + CARD / 2 - 4 * mm, cmd)
 
 
-def build_pdf(groups: list[str], output: Path) -> None:
+def build_pdf(deck: dict[str, list[str]], output: Path) -> None:
     c = canvas.Canvas(str(output), pagesize=A4)
-    for group in groups:
+    for group, cmds in deck.items():
         style = GROUP_STYLE[group]
-        cards = [("word", cmd) for cmd in COMMANDS[group]]
-        cards += [("pic", cmd) for cmd in COMMANDS[group]]
+        cards = [("word", cmd) for cmd in cmds]
+        cards += [("pic", cmd) for cmd in cmds]
 
         for page_start in range(0, len(cards), PER_PAGE):
             page_cards = cards[page_start:page_start + PER_PAGE]
@@ -295,6 +368,10 @@ def main() -> None:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--groups", nargs="+", choices=GROUP_ORDER, default=GROUP_ORDER,
                     help="which difficulty groups to include (default: all)")
+    ap.add_argument("--programs", type=Path, default=PROGRAMS_DIR,
+                    help="folder of .bas programs to scan (default: ../programs)")
+    ap.add_argument("--all", action="store_true",
+                    help="ignore the programs and print the full keyword catalog")
     ap.add_argument("--output", type=Path, default=HERE / "sinclair-memory-cards.pdf",
                     help="output PDF path")
     ap.add_argument("--placeholder", action="store_true",
@@ -309,15 +386,22 @@ def main() -> None:
     # keep the group order stable regardless of argument order
     groups = [g for g in GROUP_ORDER if g in args.groups]
 
+    used = None if args.all else extract_used_commands(args.programs)
+    deck = build_deck(groups, used)
+    if not deck:
+        sys.exit("Nothing to print: the selected groups contain no used commands.")
+    for group, cmds in deck.items():
+        print(f"{GROUP_STYLE[group]['label']}: {len(cmds)} command(s) — {', '.join(cmds)}")
+
     CACHE_DIR.mkdir(exist_ok=True)
     IMAGES_DIR.mkdir(exist_ok=True)
 
     if not (args.placeholder or args.skip_generation):
         print("Generating pictograms (GPT 5.5 prompt -> Ideogram 4 Turbo image, cached):")
-        generate_assets(groups)
+        generate_assets(deck)
 
     print(f"Building PDF: {args.output}")
-    build_pdf(groups, args.output)
+    build_pdf(deck, args.output)
     print("Done. Print at 100% / actual size (no 'fit to page') and cut along the card borders.")
 
 
