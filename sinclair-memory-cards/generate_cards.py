@@ -100,11 +100,24 @@ def slugify(cmd: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", cmd.lower()).strip("-")
 
 
+def image_model_id(backend: str) -> str:
+    """Identity of the image model in use — the image cache key.
+
+    Includes the concrete model (and, for Ideogram, the rendering speed), so
+    changing the image model never reuses pictures made by a different one.
+    """
+    if backend == "openai":
+        return OPENAI_IMAGE_MODEL
+    m = re.search(r"ideogram-[A-Za-z0-9.]+", IDEOGRAM_URL)
+    base = m.group(0) if m else "ideogram"
+    return f"{base}-{IDEOGRAM_RENDERING_SPEED.lower()}"
+
+
 def images_dir(backend: str) -> Path:
-    """Each image backend caches into its own folder, so switching the
-    --image-backend flag switches the pictures instead of reusing the other
-    backend's cache. Prompts (GPT 5.6) are shared across backends."""
-    return CACHE_DIR / "images" / backend
+    """Each image model caches into its own folder (e.g. images/ideogram-v4-turbo,
+    images/gpt-image-2), so switching backend or model switches the pictures
+    instead of reusing another model's cache. Prompts (GPT 5.6) are shared."""
+    return CACHE_DIR / "images" / slugify(image_model_id(backend))
 
 
 def load_dotenv(path: Path) -> None:
@@ -273,7 +286,7 @@ def generate_assets(cmds: list[str], backend: str) -> dict:
                  "(or --placeholder to preview the layout).")
 
     oai = openai.OpenAI()
-    label = "Ideogram" if backend == "ideogram" else f"OpenAI {OPENAI_IMAGE_MODEL}"
+    label = image_model_id(backend)
 
     prompts = load_prompts()
     for cmd in cmds:
@@ -409,8 +422,8 @@ def main() -> None:
     images_dir(backend).mkdir(parents=True, exist_ok=True)
 
     if not (args.placeholder or args.skip_generation):
-        drawer = "Ideogram 4 Turbo" if backend == "ideogram" else f"OpenAI {OPENAI_IMAGE_MODEL}"
-        print(f"Generating pictograms (GPT 5.6 prompt -> {drawer} image, cached):")
+        print(f"Generating pictograms (GPT 5.6 prompt -> {image_model_id(backend)} "
+              f"image, cached per model):")
         generate_assets(cmds, backend)
 
     print(f"Building PDF: {args.output}")
