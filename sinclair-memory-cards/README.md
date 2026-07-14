@@ -1,7 +1,8 @@
 # Sinclair BASIC memory cards
 
-Generates a printable **PDF of memory-game cards** that teach a young child (≈7)
-the Sinclair BASIC commands of the rubber-key ZX Spectrum.
+Generates a printable **PDF of memory-game cards** that teach a child (≈8)
+the Sinclair BASIC commands of the rubber-key ZX Spectrum. The pictograms are
+drawn in a clean, slightly technical style — smart, not babyish.
 
 The card set is driven by the programs we actually write: the script scans the
 BASIC programs in the repository's [`programs/`](../programs) folder, extracts the
@@ -28,22 +29,25 @@ vector-graphic art** in one consistent style across the whole deck.
 2. An image model turns that prompt into a PNG — **Ideogram 4 Turbo** by default,
    or **OpenAI Image 2** with `--image-backend openai`.
 
-Both results are cached under `cache/`, keyed by the exact models that made them:
+Both results are cached under `cache/`, keyed by the exact models — and style —
+that made them:
 
 ```
 cache/
-  gpt-5.6-sol/                 # the text model that wrote the prompts
-    prompts.json
-    images/
-      ideogram-v4-turbo/       # the image model that drew from those prompts
-      gpt-image-2/
+  gpt-5-6-sol/                 # the text model that wrote the prompts
+    3fa2b1c9/                  # hash of the style instructions in generate_cards.py
+      prompts.json
+      images/
+        ideogram-v4-turbo/     # the image model that drew from those prompts
+        gpt-image-2/
 ```
 
-Re-running only does the work that is missing. Because both models are part of
-the cache key, changing the text model regenerates the prompts *and* the
-pictures (they were drawn from the old prompts), and switching the image
-backend/model never reuses pictures made by a different one — you can generate
-several sets and compare.
+Re-running only does the work that is missing. Because the models and the style
+texts are all part of the cache key, changing the text model *or editing the
+style/system prompts in `generate_cards.py`* regenerates the prompts and the
+pictures, and switching the image backend/model never reuses pictures made by a
+different one — every old set stays on disk under its own key, so you can
+compare.
 
 ## Which commands get cards
 

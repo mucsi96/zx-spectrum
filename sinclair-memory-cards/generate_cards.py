@@ -44,6 +44,7 @@ Model / endpoint overrides (optional):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -76,22 +77,29 @@ IDEOGRAM_ASPECT_RATIO = os.environ.get("IDEOGRAM_ASPECT_RATIO", "1x1")
 
 # Appended to every image prompt so the whole deck shares one look.
 STYLE_SUFFIX = (
-    " Vector graphic art: clean flat vector illustration, bold geometric shapes, "
-    "crisp smooth outlines, bright flat colour fills, no gradients, no shading, "
-    "no photographic texture, one clear friendly centred subject, "
-    "pure solid white background, generous empty margin, "
+    " Vector graphic art: sleek flat vector illustration, bold geometric shapes, "
+    "crisp smooth outlines, flat colour fills in a restrained modern palette, "
+    "no gradients, no shading, no photographic texture. One clear centred subject, "
+    "drawn matter-of-factly like a quality technical infographic icon — not cute, "
+    "no smiley faces, no googly eyes, no cartoon mascots, nothing babyish. "
+    "Pure solid white background, generous empty margin, "
     "no text, no letters, no numbers, no words anywhere in the image."
 )
 
 PROMPT_SYSTEM = (
-    "You design pictograms for a memory-matching card game that teaches a 7-year-old "
-    "child the commands of Sinclair BASIC on the rubber-key ZX Spectrum. "
+    "You design pictograms for a memory-matching card game that teaches an 8-year-old "
+    "the commands of Sinclair BASIC on the rubber-key ZX Spectrum. The child is a "
+    "serious learner: the pictures should feel smart and a bit grown-up — like clean "
+    "technical infographic icons — never babyish, cute or cartoonish. "
     "You will be given one Sinclair BASIC keyword. Recall what that command does, then "
-    "invent ONE clear, literal picture that a child could look at and instantly connect "
-    "to what the command does. It must be a concrete visual scene or object, not an "
-    "abstract idea, and it must not rely on any text, letters or numbers being drawn. "
-    "Reply with ONLY the image-generation prompt: one or two vivid sentences describing "
-    "exactly what should be drawn. Do not add explanations, quotes or a preamble."
+    "invent ONE clear, literal picture that instantly connects to what the command "
+    "does. It must be a concrete visual scene or object, not an abstract idea; "
+    "retro-computing props (CRT screen, cassette tape and recorder, keyboard, memory "
+    "chips, flow arrows) are welcome where they genuinely explain the command. "
+    "It must not rely on any text, letters or numbers being drawn. "
+    "Reply with ONLY the image-generation prompt: one or two precise sentences "
+    "describing exactly what should be drawn. Do not add explanations, quotes or a "
+    "preamble."
 )
 
 
@@ -112,15 +120,22 @@ def image_model_id(backend: str) -> str:
     return f"{base}-{IDEOGRAM_RENDERING_SPEED.lower()}"
 
 
-def text_model_dir() -> Path:
-    """Cache root for everything produced with the current text model.
+# The style texts shape every prompt and picture, so they are part of the cache
+# key: editing PROMPT_SYSTEM or STYLE_SUFFIX regenerates everything instead of
+# silently serving assets made with the old style.
+STYLE_ID = hashlib.sha1((PROMPT_SYSTEM + STYLE_SUFFIX).encode()).hexdigest()[:8]
 
-    Prompts are written by the text model, and the images are drawn from those
-    prompts — so both live under the text model's folder. Changing the text
-    model therefore regenerates the prompts AND the pictures; cached pictures
-    are never mixed with prompts from a different model.
+
+def text_model_dir() -> Path:
+    """Cache root for everything produced with the current text model + style.
+
+    Prompts are written by the text model under the current style texts, and
+    the images are drawn from those prompts — so everything lives under
+    cache/<text-model>/<style-id>/. Changing the text model or the style
+    regenerates the prompts AND the pictures; cached pictures are never mixed
+    with prompts from a different model or style.
     """
-    return CACHE_DIR / slugify(OPENAI_TEXT_MODEL)
+    return CACHE_DIR / slugify(OPENAI_TEXT_MODEL) / STYLE_ID
 
 
 def prompts_file() -> Path:
