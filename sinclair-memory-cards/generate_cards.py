@@ -12,27 +12,31 @@ For every command you get a *pair* of cards:
   * a "picture" card with an AI-drawn pictogram of what the command does
 
 The picture for each command is produced in two AI steps:
-  1. GPT 5.5 is asked to invent a short image-generation prompt describing a clear
+  1. GPT 5.6 is asked to invent a short image-generation prompt describing a clear
      pictogram for that one command (it already knows what each command does).
-  2. Ideogram 4 Turbo turns that prompt into a PNG.
+  2. An image model turns that prompt into a PNG — Ideogram 4 Turbo by default,
+     or OpenAI Image 2 with --image-backend openai.
 
-Both steps are cached on disk, so re-running only does the work that is missing —
-adding a new program later only generates cards for its newly-used commands.
-The cards are laid out 20 to an A4 page (4x5 squares).
+Both steps are cached on disk (images per backend), so re-running only does the
+work that is missing — adding a new program later only generates cards for its
+newly-used commands. The cards are laid out 20 to an A4 page (4x5 squares).
 
 Usage:
     cp .env.example .env      # then put your OPENAI_API_KEY / IDEOGRAM_API_KEY in it
-    python generate_cards.py                      # commands used in programs/
-    python generate_cards.py --all                # the full keyword catalog
-    python generate_cards.py --programs ../progs  # scan a different folder
-    python generate_cards.py --placeholder         # no API calls: preview the layout
-    python generate_cards.py --skip-generation     # rebuild the PDF from the cache only
+    python generate_cards.py                        # commands used in programs/
+    python generate_cards.py --image-backend openai # draw with OpenAI Image 2 instead
+    python generate_cards.py --all                  # the full keyword catalog
+    python generate_cards.py --programs ../progs    # scan a different folder
+    python generate_cards.py --placeholder           # no API calls: preview the layout
+    python generate_cards.py --skip-generation       # rebuild the PDF from the cache only
 
 Keys are read from a local .env file (or the real environment, which takes
 precedence).
 
 Model / endpoint overrides (optional):
-    OPENAI_TEXT_MODEL         (default: gpt-5.5)
+    IMAGE_BACKEND             (default: ideogram)  default for --image-backend
+    OPENAI_TEXT_MODEL         (default: gpt-5.6-sol)
+    OPENAI_IMAGE_MODEL        (default: gpt-image-2)
     IDEOGRAM_URL              (default: https://api.ideogram.ai/v1/ideogram-v4/generate)
     IDEOGRAM_RENDERING_SPEED  (default: TURBO)   TURBO | DEFAULT | QUALITY
     IDEOGRAM_ASPECT_RATIO     (default: 1x1)     square pictures for square cards
@@ -56,11 +60,14 @@ from commands import KEYWORDS
 
 HERE = Path(__file__).resolve().parent
 CACHE_DIR = HERE / "cache"
-IMAGES_DIR = CACHE_DIR / "images"
 PROMPTS_FILE = CACHE_DIR / "prompts.json"
 PROGRAMS_DIR = HERE.parent / "programs"
 
-OPENAI_TEXT_MODEL = os.environ.get("OPENAI_TEXT_MODEL", "gpt-5.5")
+IMAGE_BACKENDS = ("ideogram", "openai")
+IMAGE_BACKEND_DEFAULT = os.environ.get("IMAGE_BACKEND", "ideogram")
+
+OPENAI_TEXT_MODEL = os.environ.get("OPENAI_TEXT_MODEL", "gpt-5.6-sol")
+OPENAI_IMAGE_MODEL = os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-2")
 IDEOGRAM_URL = os.environ.get(
     "IDEOGRAM_URL", "https://api.ideogram.ai/v1/ideogram-v4/generate")
 IDEOGRAM_RENDERING_SPEED = os.environ.get("IDEOGRAM_RENDERING_SPEED", "TURBO")
@@ -91,6 +98,13 @@ PROMPT_SYSTEM = (
 
 def slugify(cmd: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", cmd.lower()).strip("-")
+
+
+def images_dir(backend: str) -> Path:
+    """Each image backend caches into its own folder, so switching the
+    --image-backend flag switches the pictures instead of reusing the other
+    backend's cache. Prompts (GPT 5.6) are shared across backends."""
+    return CACHE_DIR / "images" / backend
 
 
 def load_dotenv(path: Path) -> None:
@@ -169,7 +183,7 @@ def extract_used_commands(programs_dir: Path) -> set[str]:
 
 
 # --------------------------------------------------------------------------- #
-# AI step 1: GPT 5.5 invents the image prompt.
+# AI step 1: GPT 5.6 invents the image prompt.
 # --------------------------------------------------------------------------- #
 def get_image_prompt(client, cmd: str) -> str:
     resp = client.chat.completions.create(
@@ -183,9 +197,9 @@ def get_image_prompt(client, cmd: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# AI step 2: Ideogram 4 Turbo turns the prompt into a PNG.
+# AI step 2: an image model turns the prompt into a PNG.
 # --------------------------------------------------------------------------- #
-def generate_image(prompt: str, out_path: Path, api_key: str) -> None:
+def generate_image_ideogram(prompt: str, out_path: Path, api_key: str) -> None:
     import requests
 
     # Ideogram v3/v4 generate endpoints take multipart/form-data; passing text
@@ -215,6 +229,28 @@ def generate_image(prompt: str, out_path: Path, api_key: str) -> None:
     out_path.write_bytes(img.content)
 
 
+def generate_image_openai(client, prompt: str, out_path: Path) -> None:
+    import base64
+
+    result = client.images.generate(
+        model=OPENAI_IMAGE_MODEL,
+        prompt=prompt + STYLE_SUFFIX,
+        size="1024x1024",
+        n=1,
+    )
+    data = result.data[0]
+    if getattr(data, "b64_json", None):
+        img_bytes = base64.b64decode(data.b64_json)
+    elif getattr(data, "url", None):
+        import requests
+        resp = requests.get(data.url, timeout=180)
+        resp.raise_for_status()
+        img_bytes = resp.content
+    else:
+        raise RuntimeError("OpenAI image API returned neither b64_json nor url")
+    out_path.write_bytes(img_bytes)
+
+
 def load_prompts() -> dict:
     if PROMPTS_FILE.exists():
         return json.loads(PROMPTS_FILE.read_text())
@@ -225,29 +261,34 @@ def save_prompts(prompts: dict) -> None:
     PROMPTS_FILE.write_text(json.dumps(prompts, indent=2, ensure_ascii=False))
 
 
-def generate_assets(cmds: list[str]) -> dict:
+def generate_assets(cmds: list[str], backend: str) -> dict:
     """Run the two AI steps for every command (cached)."""
     import openai
 
     if not os.environ.get("OPENAI_API_KEY"):
         sys.exit("OPENAI_API_KEY is not set (or use --placeholder to preview the layout).")
     ideogram_key = os.environ.get("IDEOGRAM_API_KEY")
-    if not ideogram_key:
-        sys.exit("IDEOGRAM_API_KEY is not set (or use --placeholder to preview the layout).")
+    if backend == "ideogram" and not ideogram_key:
+        sys.exit("IDEOGRAM_API_KEY is not set — set it, or use --image-backend openai "
+                 "(or --placeholder to preview the layout).")
 
     oai = openai.OpenAI()
+    label = "Ideogram" if backend == "ideogram" else f"OpenAI {OPENAI_IMAGE_MODEL}"
 
     prompts = load_prompts()
     for cmd in cmds:
         slug = slugify(cmd)
         if slug not in prompts:
-            print(f"  [GPT 5.5] prompt for {cmd} ...")
+            print(f"  [GPT 5.6] prompt for {cmd} ...")
             prompts[slug] = get_image_prompt(oai, cmd)
             save_prompts(prompts)  # persist after each success
-        img_path = IMAGES_DIR / f"{slug}.png"
+        img_path = images_dir(backend) / f"{slug}.png"
         if not img_path.exists():
-            print(f"  [Ideogram] image for {cmd} ...")
-            generate_image(prompts[slug], img_path, ideogram_key)
+            print(f"  [{label}] image for {cmd} ...")
+            if backend == "ideogram":
+                generate_image_ideogram(prompts[slug], img_path, ideogram_key)
+            else:
+                generate_image_openai(oai, prompts[slug], img_path)
     return prompts
 
 
@@ -313,7 +354,7 @@ def draw_picture_card(c: canvas.Canvas, x: float, y: float, cmd: str,
         c.drawCentredString(x + CARD / 2, y + CARD / 2 - 4 * mm, cmd)
 
 
-def build_pdf(cmds: list[str], output: Path) -> None:
+def build_pdf(cmds: list[str], output: Path, backend: str) -> None:
     c = canvas.Canvas(str(output), pagesize=A4)
     cards = [("word", cmd) for cmd in cmds] + [("pic", cmd) for cmd in cmds]
 
@@ -327,7 +368,8 @@ def build_pdf(cmds: list[str], output: Path) -> None:
             if kind == "word":
                 draw_word_card(c, x, y, cmd)
             else:
-                draw_picture_card(c, x, y, cmd, IMAGES_DIR / f"{slugify(cmd)}.png")
+                draw_picture_card(c, x, y, cmd,
+                                  images_dir(backend) / f"{slugify(cmd)}.png")
         c.showPage()
     c.save()
 
@@ -340,6 +382,10 @@ def main() -> None:
                     help="folder of .bas programs to scan (default: ../programs)")
     ap.add_argument("--all", action="store_true",
                     help="ignore the programs and print the full keyword catalog")
+    ap.add_argument("--image-backend", choices=IMAGE_BACKENDS,
+                    default=IMAGE_BACKEND_DEFAULT,
+                    help="who draws the pictures: ideogram (Ideogram 4 Turbo, default) "
+                         "or openai (OpenAI Image 2)")
     ap.add_argument("--output", type=Path, default=HERE / "sinclair-memory-cards.pdf",
                     help="output PDF path")
     ap.add_argument("--placeholder", action="store_true",
@@ -358,15 +404,17 @@ def main() -> None:
         cmds = [c for c in KEYWORDS if c in used]  # keep catalog (teaching) order
     print(f"{len(cmds)} command(s): {', '.join(cmds)}")
 
+    backend = args.image_backend
     CACHE_DIR.mkdir(exist_ok=True)
-    IMAGES_DIR.mkdir(exist_ok=True)
+    images_dir(backend).mkdir(parents=True, exist_ok=True)
 
     if not (args.placeholder or args.skip_generation):
-        print("Generating pictograms (GPT 5.5 prompt -> Ideogram 4 Turbo image, cached):")
-        generate_assets(cmds)
+        drawer = "Ideogram 4 Turbo" if backend == "ideogram" else f"OpenAI {OPENAI_IMAGE_MODEL}"
+        print(f"Generating pictograms (GPT 5.6 prompt -> {drawer} image, cached):")
+        generate_assets(cmds, backend)
 
     print(f"Building PDF: {args.output}")
-    build_pdf(cmds, args.output)
+    build_pdf(cmds, args.output, backend)
     print("Done. Print at 100% / actual size (no 'fit to page') and cut along the card borders.")
 
 

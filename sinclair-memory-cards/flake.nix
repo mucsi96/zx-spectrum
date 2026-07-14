@@ -33,8 +33,9 @@
           packages = [ (pythonEnvFor pkgs) ];
           shellHook = ''
             echo "sinclair-memory-cards dev shell — $(python --version)"
-            echo "run:  python generate_cards.py                # cards for the commands used in ../programs"
-            echo "      python generate_cards.py --placeholder  # layout preview, no API calls"
+            echo "run:  python generate_cards.py                          # cards for the commands used in ../programs"
+            echo "      python generate_cards.py --image-backend openai   # draw with OpenAI Image 2 (default: ideogram)"
+            echo "      python generate_cards.py --placeholder            # layout preview, no API calls"
           '';
         };
       });

@@ -10,7 +10,7 @@ programs in the repository's programs/ folder and makes cards only for the
 keywords actually used there — this catalog is what it recognises keywords
 against. (Use --all to print the whole catalog.)
 
-Just the keyword names are listed — the image-prompt model (GPT 5.5) already
+Just the keyword names are listed — the image-prompt model (GPT 5.6) already
 knows what each Sinclair BASIC command does, so no descriptions are needed.
 The order below is roughly how approachable each command is for a young
 beginner; cards are printed in this order.

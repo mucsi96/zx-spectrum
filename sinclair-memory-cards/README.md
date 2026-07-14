@@ -22,14 +22,16 @@ vector-graphic art** in one consistent style across the whole deck.
 
 ## How the pictures are made (two AI steps per command)
 
-1. **GPT 5.5** is asked, one command at a time, to invent a short
+1. **GPT 5.6** is asked, one command at a time, to invent a short
    *image-generation prompt* describing a clear pictogram for that command
    (it already knows what each Sinclair BASIC command does).
-2. **Ideogram 4 Turbo** turns that prompt into a PNG.
+2. An image model turns that prompt into a PNG — **Ideogram 4 Turbo** by default,
+   or **OpenAI Image 2** with `--image-backend openai`.
 
 Both results are cached under `cache/` (prompts in `cache/prompts.json`, images in
-`cache/images/`), so re-running only does the work that is missing and you never
-pay for the same picture twice.
+`cache/images/<backend>/`), so re-running only does the work that is missing and
+you never pay for the same picture twice. Each backend keeps its own image cache,
+so you can generate both and compare; the prompts are shared.
 
 ## Which commands get cards
 
@@ -49,7 +51,7 @@ into difficulty decks — the set is already exactly the commands worth learning
 right now. Cards are printed in the catalog's teaching order, 20 to an A4 page
 in a 4×5 grid of squares, across as many pages as needed.
 
-> One GPT 5.5 call + one Ideogram call per command, both cached — so you only ever
+> One GPT 5.6 call + one Ideogram call per command, both cached — so you only ever
 > pay for a command's picture once, no matter how many times you re-run.
 
 ## Setting up the environment
@@ -101,6 +103,9 @@ python generate_cards.py --placeholder
 # Generate cards for the commands used in ../programs (the default):
 python generate_cards.py
 
+# Draw the pictures with OpenAI Image 2 instead of Ideogram 4 Turbo:
+python generate_cards.py --image-backend openai
+
 # The full keyboard catalog instead of scanning the programs:
 python generate_cards.py --all
 
@@ -121,7 +126,9 @@ through from behind.
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `OPENAI_TEXT_MODEL` | `gpt-5.5` | The OpenAI model used to write each image prompt. |
+| `IMAGE_BACKEND` | `ideogram` | Default for `--image-backend`: `ideogram` or `openai`. |
+| `OPENAI_TEXT_MODEL` | `gpt-5.6-sol` | The OpenAI model used to write each image prompt. |
+| `OPENAI_IMAGE_MODEL` | `gpt-image-2` | Used with `--image-backend openai`. |
 | `IDEOGRAM_URL` | `https://api.ideogram.ai/v1/ideogram-v4/generate` | Ideogram generate endpoint. |
 | `IDEOGRAM_RENDERING_SPEED` | `TURBO` | `TURBO`, `DEFAULT` or `QUALITY`. |
 | `IDEOGRAM_ASPECT_RATIO` | `1x1` | Square by default; set empty to let the model choose. |
