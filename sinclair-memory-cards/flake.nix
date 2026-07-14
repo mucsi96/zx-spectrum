@@ -33,8 +33,8 @@
           packages = [ (pythonEnvFor pkgs) ];
           shellHook = ''
             echo "sinclair-memory-cards dev shell — $(python --version)"
-            echo "run:  python generate_cards.py --placeholder      # preview, no API calls"
-            echo "      python generate_cards.py --groups simple     # real cards, easy deck"
+            echo "run:  python generate_cards.py                # cards for the commands used in ../programs"
+            echo "      python generate_cards.py --placeholder  # layout preview, no API calls"
           '';
         };
       });
