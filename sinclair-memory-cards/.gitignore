@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Secrets
+.env
+
+# Nix / direnv
+result
+result-*
+.direnv/
+
+# Generated output and AI cache
+cache/
+cache_old/
+*.pdf

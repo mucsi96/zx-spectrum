@@ -1,0 +1,7 @@
+# Single source of truth for the Python dependencies.
+# Used directly by pip, and parsed by flake.nix for the Nix dev shell,
+# so the list only lives here. Comments and version specifiers are ignored
+# by the flake; only the package names are read.
+openai>=1.50
+requests>=2.31
+reportlab>=4.0
