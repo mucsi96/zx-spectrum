@@ -28,12 +28,22 @@ vector-graphic art** in one consistent style across the whole deck.
 2. An image model turns that prompt into a PNG — **Ideogram 4 Turbo** by default,
    or **OpenAI Image 2** with `--image-backend openai`.
 
-Both results are cached under `cache/` — prompts in `cache/prompts.json`, images
-in a folder named after the exact image model (e.g. `cache/images/ideogram-v4-turbo/`,
-`cache/images/gpt-image-2/`). Re-running only does the work that is missing, and
-because the image model is part of the cache key, switching backend or model never
-reuses pictures made by a different model — you can generate several sets and
-compare. The prompts are shared across image models.
+Both results are cached under `cache/`, keyed by the exact models that made them:
+
+```
+cache/
+  gpt-5.6-sol/                 # the text model that wrote the prompts
+    prompts.json
+    images/
+      ideogram-v4-turbo/       # the image model that drew from those prompts
+      gpt-image-2/
+```
+
+Re-running only does the work that is missing. Because both models are part of
+the cache key, changing the text model regenerates the prompts *and* the
+pictures (they were drawn from the old prompts), and switching the image
+backend/model never reuses pictures made by a different one — you can generate
+several sets and compare.
 
 ## Which commands get cards
 

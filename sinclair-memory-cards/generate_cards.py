@@ -60,7 +60,6 @@ from commands import KEYWORDS
 
 HERE = Path(__file__).resolve().parent
 CACHE_DIR = HERE / "cache"
-PROMPTS_FILE = CACHE_DIR / "prompts.json"
 PROGRAMS_DIR = HERE.parent / "programs"
 
 IMAGE_BACKENDS = ("ideogram", "openai")
@@ -101,7 +100,7 @@ def slugify(cmd: str) -> str:
 
 
 def image_model_id(backend: str) -> str:
-    """Identity of the image model in use — the image cache key.
+    """Identity of the image model in use — part of the image cache key.
 
     Includes the concrete model (and, for Ideogram, the rendering speed), so
     changing the image model never reuses pictures made by a different one.
@@ -113,11 +112,26 @@ def image_model_id(backend: str) -> str:
     return f"{base}-{IDEOGRAM_RENDERING_SPEED.lower()}"
 
 
+def text_model_dir() -> Path:
+    """Cache root for everything produced with the current text model.
+
+    Prompts are written by the text model, and the images are drawn from those
+    prompts — so both live under the text model's folder. Changing the text
+    model therefore regenerates the prompts AND the pictures; cached pictures
+    are never mixed with prompts from a different model.
+    """
+    return CACHE_DIR / slugify(OPENAI_TEXT_MODEL)
+
+
+def prompts_file() -> Path:
+    return text_model_dir() / "prompts.json"
+
+
 def images_dir(backend: str) -> Path:
-    """Each image model caches into its own folder (e.g. images/ideogram-v4-turbo,
-    images/gpt-image-2), so switching backend or model switches the pictures
-    instead of reusing another model's cache. Prompts (GPT 5.6) are shared."""
-    return CACHE_DIR / "images" / slugify(image_model_id(backend))
+    """Per image model, under the current text model (e.g.
+    cache/gpt-5.6-sol/images/ideogram-v4-turbo). Switching either model
+    switches the pictures instead of reusing another model's cache."""
+    return text_model_dir() / "images" / slugify(image_model_id(backend))
 
 
 def load_dotenv(path: Path) -> None:
@@ -265,13 +279,16 @@ def generate_image_openai(client, prompt: str, out_path: Path) -> None:
 
 
 def load_prompts() -> dict:
-    if PROMPTS_FILE.exists():
-        return json.loads(PROMPTS_FILE.read_text())
+    path = prompts_file()
+    if path.exists():
+        return json.loads(path.read_text())
     return {}
 
 
 def save_prompts(prompts: dict) -> None:
-    PROMPTS_FILE.write_text(json.dumps(prompts, indent=2, ensure_ascii=False))
+    path = prompts_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(prompts, indent=2, ensure_ascii=False))
 
 
 def generate_assets(cmds: list[str], backend: str) -> dict:
@@ -292,7 +309,7 @@ def generate_assets(cmds: list[str], backend: str) -> dict:
     for cmd in cmds:
         slug = slugify(cmd)
         if slug not in prompts:
-            print(f"  [GPT 5.6] prompt for {cmd} ...")
+            print(f"  [{OPENAI_TEXT_MODEL}] prompt for {cmd} ...")
             prompts[slug] = get_image_prompt(oai, cmd)
             save_prompts(prompts)  # persist after each success
         img_path = images_dir(backend) / f"{slug}.png"
@@ -422,8 +439,8 @@ def main() -> None:
     images_dir(backend).mkdir(parents=True, exist_ok=True)
 
     if not (args.placeholder or args.skip_generation):
-        print(f"Generating pictograms (GPT 5.6 prompt -> {image_model_id(backend)} "
-              f"image, cached per model):")
+        print(f"Generating pictograms ({OPENAI_TEXT_MODEL} prompt -> "
+              f"{image_model_id(backend)} image, cached per model):")
         generate_assets(cmds, backend)
 
     print(f"Building PDF: {args.output}")
