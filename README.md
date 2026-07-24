@@ -1,289 +1,141 @@
-# Fuse (ZX Spectrum) — flash-and-go autostart on Raspberry Pi 3B
+# ZX Spectrum Next kiosk — ZEsarUX with host-disk NextBASIC
 
-Boots a Raspberry Pi 3B straight into the **Fuse** ZX Spectrum emulator, fullscreen,
-with **no desktop environment**. Almost everything is provisioned by **cloud-init** on
-first boot, so you barely touch the Pi itself.
+Runs the **ZX Spectrum Next** (NextZXOS / NextBASIC) in the **ZEsarUX**
+emulator, patched so that the BASIC commands work directly on plain files in
+a host directory — no SD-image juggling, no tape files:
 
-- **Hardware:** Raspberry Pi 3B
-- **OS:** Raspberry Pi OS **Lite**, Debian 13 **Trixie** (image dated 24 Nov 2025 or newer — these ship cloud-init)
-- **Imager:** Raspberry Pi **Imager 2.0.6+** (older Imager can't customise Trixie)
-- **Emulator:** Fuse **1.8.0**, built from source with **native SDL2**
-- **Display path:** SDL2 → KMS/DRM, no X server
+| In NextBASIC        | On the host                              |
+|---------------------|------------------------------------------|
+| `SAVE "lib"`        | writes `~/programs/lib.bas`              |
+| `LOAD "game"`       | reads `~/programs/game.bas`              |
+| `MERGE "lib"`       | merges `~/programs/lib.bas`              |
+| `SAVE "@"`          | re-saves to the last file used           |
+| `ERASE "lib"`       | deletes `~/programs/lib.bas`             |
 
----
+The `.bas` files are **raw tokenized BASIC** (no 128-byte PLUS3DOS header)
+and are the source of truth: version them, sync them, convert them to/from
+text listings with `tools/nextbas.py`. Everything else on the emulated SD
+card (NextZXOS itself, the Browser, demos) keeps working — only plain
+filenames are redirected to the host.
 
-## Why build from source instead of `apt install`?
-
-The packaged Fuse on Trixie is **1.6.0**, built against the **SDL 1.2** API, which on Trixie
-is provided by the **sdl12-compat** shim (SDL 1.2 on top of SDL2). Its OpenGL-scaling path
-does **not** work headless under `kmsdrm` — you get a **black screen, no error**.
-
-Fuse **1.8.0** is the first release with native **SDL 2**, so it talks to SDL2's `kmsdrm`
-backend directly, auto-selects the correct display device, and just works. Hence the source build.
-
----
-
-# Part A — The cloud-init way (recommended)
-
-Raspberry Pi OS Trixie uses cloud-init for first-boot setup. After flashing, the FAT32 boot
-partition (`bootfs`) contains three files: **`user-data`**, **`network-config`**, **`meta-data`**.
-We let Imager fill in the tricky identity/Wi-Fi parts, then add a Fuse block to `user-data`.
-
-## Step 1 — Flash with Imager and set the basics
-
-In Raspberry Pi Imager, choose **Raspberry Pi OS Lite (64-bit, Trixie)**, then open the
-customisation (gear / "Edit settings") and set:
-
-- **Username + password** (remember the username — you'll reference it below)
-- **Wi-Fi** SSID, password, and **Wi-Fi country**
-- **Hostname**
-- **Enable SSH** (paste a public key if you have one — then you never type a password)
-- **Locale / timezone**
-
-Imager writes correct `user-data` + `network-config` from these. Write the image, but **don't
-eject yet.**
-
-## Step 2 — Add the Fuse block to `user-data`
-
-Open the `bootfs` partition on your computer and edit **`user-data`**. It already starts with
-`#cloud-config` and has a `users:` section from Imager. **Merge** the keys below into it — add
-each top-level key once; if a key (e.g. `runcmd:`) already exists, append the items to the
-existing list instead of adding a second copy.
-
-```yaml
-# ---- add to the existing user-data (do not create a second #cloud-config) ----
-
-package_update: true
-packages:
-  - build-essential
-  - pkg-config
-  - libsdl2-dev
-  - libpng-dev
-  - libxml2-dev
-  - zlib1g-dev
-  - libgcrypt20-dev
-  - libbz2-dev
-  - libasound2-dev
-  - dialog
-
-write_files:
-  # 3-line autostart, staged here and installed into the user's home by the script below.
-  # No `exec`, no loop: if Fuse exits you land at a normal shell prompt — never locked out.
-  - path: /etc/fuse/bash_profile
-    permissions: '0644'
-    content: |
-      if [ "$(tty)" = "/dev/tty1" ]; then
-        ~/spectrum-launcher.sh
-      fi
-
-  - path: /usr/local/sbin/setup-fuse.sh
-    permissions: '0755'
-    content: |
-      #!/bin/bash
-      set -euxo pipefail
-
-      # ===== CONFIG — the only lines you normally touch ==========================
-      FUSE_VER="1.8.0"        # pin a version ("1.8.0", "1.9.0", ...) or "auto" for newest
-      LIBSPEC_VER="1.6.0"     # libspectrum version to build ("1.6.0", ...) or "auto"
-      USER_NAME="pi"          # <<< set to the username you chose in Imager
-      # ===========================================================================
-
-      HOME_DIR="$(getent passwd "$USER_NAME" | cut -d: -f6)"
-      exec >>/var/log/fuse-build.log 2>&1
-
-      # Resolve "auto" to the newest source tarball on SourceForge (reads the file RSS once).
-      sf_latest() {   # $1 = subdir (fuse|libspectrum)   $2 = filename prefix (fuse-|libspectrum-)
-        wget -qO- "https://sourceforge.net/projects/fuse-emulator/rss?path=/$1" 2>/dev/null \
-          | grep -oE "$2[0-9]+(\.[0-9]+)+\.tar\.gz" \
-          | sed -E "s/.*$2//; s/\.tar\.gz//" \
-          | sort -V | tail -n1
-      }
-      [ "$FUSE_VER" = auto ]    && FUSE_VER="$(sf_latest fuse fuse-)"
-      [ "$LIBSPEC_VER" = auto ] && LIBSPEC_VER="$(sf_latest libspectrum libspectrum-)"
-
-      mkdir -p /usr/local/src && cd /usr/local/src
-
-      # libspectrum: always built from source
-      wget -O "libspectrum-${LIBSPEC_VER}.tar.gz" "https://sourceforge.net/projects/fuse-emulator/files/libspectrum/${LIBSPEC_VER}/libspectrum-${LIBSPEC_VER}.tar.gz/download"
-      tar xf "libspectrum-${LIBSPEC_VER}.tar.gz"
-      ( cd "libspectrum-${LIBSPEC_VER}" && ./configure --with-fake-glib && make -j"$(nproc)" && make install && ldconfig )
-
-      # Fuse with native SDL2
-      wget -O "fuse-${FUSE_VER}.tar.gz" "https://sourceforge.net/projects/fuse-emulator/files/fuse/${FUSE_VER}/fuse-${FUSE_VER}.tar.gz/download"
-      tar xf "fuse-${FUSE_VER}.tar.gz"
-      ( cd "fuse-${FUSE_VER}" && ./configure --without-gtk --with-sdl && make -j"$(nproc)" && make install && ldconfig )
-
-      # Install the autostart into the user's home, owned by them
-      install -m 0644 -o "$USER_NAME" -g "$USER_NAME" /etc/fuse/bash_profile "${HOME_DIR}/.bash_profile"
-
-      # Persistent tape for SAVE/LOAD — created once (empty TZX), never clobbered on re-provision
-      if [ ! -f "${HOME_DIR}/tape.tzx" ]; then
-        printf 'ZXTape!\x1a\x01\x14' > "${HOME_DIR}/tape.tzx"
-        chown "${USER_NAME}:${USER_NAME}" "${HOME_DIR}/tape.tzx"
-      fi
-
-      touch /var/local/fuse-setup-done
-
-runcmd:
-  - [ raspi-config, nonint, do_boot_behaviour, B2 ]   # console autologin on tty1
-  - [ /usr/local/sbin/setup-fuse.sh ]
-```
-
-The only value you *must* change is `USER_NAME` in the script — set it to the username you chose
-in Imager.
-
-**CONFIG block** (top of `setup-fuse.sh`):
-
-- `FUSE_VER` / `LIBSPEC_VER` — pin exact versions (default `1.8.0` / `1.6.0`), or set either to `auto`
-  to build the newest source tarball from SourceForge. There is **no fallback**: if `auto` can't
-  resolve a version (or you pin one that doesn't exist), the build fails loudly in the log rather than
-  silently using something else. libspectrum is **always built from source** to the chosen version, so
-  bumping Fuse to a release needing newer libspectrum just works when you bump both (or set both `auto`).
-**Persistent tape (SAVE/LOAD).** First boot creates an empty tape at `~/tape.tzx` (only if absent, so
-your saved programs survive re-provisioning). Fuse starts with that tape **inserted but not auto-loaded**:
-`--full-screen --no-statusbar --no-auto-load --tape ~/tape.tzx`. Tape traps are on by default, so inside
-the Spectrum `LOAD ""` reads from the tape and `SAVE "name"` records to it. Persisting those saves to disk
-is a manual step — see *SAVE / LOAD and saving your work* below.
-
-## Step 3 — Boot and wait
-
-Eject, boot the Pi. On **first boot** cloud-init installs the packages and compiles
-libspectrum + Fuse. On a Pi 3B this takes roughly **10–15 minutes**. The board is reachable by
-SSH the whole time.
-
-Watch progress (optional) over SSH:
-```bash
-tail -f /var/log/fuse-build.log          # the build
-tail -f /var/log/cloud-init-output.log   # everything cloud-init runs
-ls /var/local/fuse-setup-done            # appears when the build finished
-```
-
-## Step 4 — Reboot once
-
-Autologin was enabled *during* first boot, after the console had already logged in, and the
-build finishes after that — so **Fuse won't be running on the very first boot**. Once
-`fuse-setup-done` exists:
-```bash
-sudo reboot
-```
-It now autologins on tty1 and drops straight into fullscreen Fuse. Every boot after that is
-flash-and-go.
+The previous Fuse-based 48K setup is preserved in [README-fuse.md](README-fuse.md).
 
 ---
 
-## Using it
+## Repository layout
 
-- **F1** — open Fuse's in-app menu (arrow keys + Enter; there's no window manager).
-- **File → Exit**, or press **F10**, to quit. Quitting returns you to a shell prompt.
-- Over SSH you can stop it with `pkill -f fuse`.
-
-### SAVE / LOAD and saving your work
-
-The persistent tape `~/tape.tzx` is inserted at boot but not auto-run, so you land at BASIC. With tape
-traps on (the default):
-
-- `LOAD ""` — load the next program from the tape (your previously saved work).
-- `SAVE "name"` — record a program onto the tape.
-
-**Persistence is a manual step.** `SAVE` writes into Fuse's *in-memory* copy of the tape; it is **not**
-flushed to disk automatically, and there's no reliable save-on-exit. To keep your work across reboots:
-press **F1 → Media → Tape → Write**, then save over `~/tape.tzx` (confirm the overwrite). On the next boot
-the tape is re-inserted and `LOAD ""` sees your saved programs.
-
-First-time check: the tape starts empty, so do `SAVE "test"`, then Media → Tape → Write to `~/tape.tzx`,
-reboot, and `LOAD ""` — it should come back. Keep "Confirm actions" enabled (default) so a stray reset
-doesn't silently discard the in-memory tape.
-
----
-
-# Part B — Manual reference (understanding / troubleshooting)
-
-Everything cloud-init does above, by hand — useful for fixing a running system or building
-without cloud-init.
-
-**Console autologin:** `sudo raspi-config` → System Options → Boot / Auto Login → Console Autologin.
-
-**Build dependencies:**
-```bash
-sudo apt update
-sudo apt install build-essential pkg-config libsdl2-dev libpng-dev \
-  libxml2-dev zlib1g-dev libgcrypt20-dev libbz2-dev libasound2-dev
+```
+zesarux-nextbasic-hostdisk.patch  the emulator patch (single git-apply-able diff)
+spectrum-launcher.sh              console program-picker / kiosk launcher
+tools/nextbas.py                  text listing <-> tokenized .bas converter
+programs/*.bas                    program listings (text; tokenized on deploy)
+flake.nix                         Nix flake: patched emulator + `spectrum` runner
+ansible/                          provisioning for the Raspberry Pi over SSH
 ```
 
-Pick your versions once, then reuse them below:
+## The patch
+
+`zesarux-nextbasic-hostdisk.patch` applies against
+[ZEsarUX](https://github.com/chernandezba/zesarux) master (cut and tested at
+`7d33f6b`, v13.1-SN):
+
 ```bash
-FUSE_VER=1.8.0        # or 1.9.0, etc.
-LIBSPEC_VER=1.6.0
+git clone https://github.com/chernandezba/zesarux && cd zesarux
+git apply /path/to/zesarux-nextbasic-hostdisk.patch
+cd src && ./configure --enable-sdl2 && make -j$(nproc)
 ```
 
-**libspectrum (always built from source):**
+It hooks the +3DOS API jump table (`DOS_OPEN` 0106h, `DOS_READ` 0112h, …)
+that NextZXOS uses for *all* file access, but only when the TBBlue runs in
++3e mode with the DOS ROM paged in. Plain names are served from the host
+directory; anything with a drive, path, extension or wildcard falls through
+to the real NextZXOS. The PLUS3DOS header is synthesized on LOAD and
+stripped on SAVE (the variables area too, so files stay clean tokenized
+listings), and saves are atomic (temp file + rename).
+
+The patch is inert unless `ZESARUX_NEXTBASIC_DIR` is set:
+
 ```bash
-cd ~
-wget -O "libspectrum-${LIBSPEC_VER}.tar.gz" "https://sourceforge.net/projects/fuse-emulator/files/libspectrum/${LIBSPEC_VER}/libspectrum-${LIBSPEC_VER}.tar.gz/download"
-tar xf "libspectrum-${LIBSPEC_VER}.tar.gz" && cd "libspectrum-${LIBSPEC_VER}"
-./configure --with-fake-glib && make -j4 && sudo make install && sudo ldconfig && cd ~
+ZESARUX_NEXTBASIC_DIR=$HOME/programs \
+zesarux --machine tbblue --enable-mmc --enable-divmmc-ports --mmc-file tbblue.mmc
 ```
 
-**Fuse with SDL2:**
+Optional: `ZESARUX_NEXTBASIC_AUTOLOAD=name` boots straight into
+`<dir>/name.bas` — the handler serves a synthetic `autoexec.bas` that LOADs
+the program with an autostart line, so it RUNs unattended (this is how the
+launcher starts programs). `ZESARUX_NEXTBASIC_AUTOLOAD=-` suppresses any
+real autoexec and boots to the NextZXOS menu.
+
+The bundled `tbblue.mmc` NextZXOS SD image ships with the ZEsarUX sources,
+so no extra downloads are needed.
+
+### Known limitations (all inherent to the ROM, not the patch)
+
+- `SAVE ""` cannot re-save: the NextBASIC ROM rejects an empty filename
+  with *Invalid file name* before the DOS layer is reached. Use `SAVE "@"`.
+- `NEW` returns to the NextZXOS main menu (pick *NextBASIC* to continue).
+- When an auto-loaded program ends, NextZXOS shows its menu.
+- `SAVE "name" LINE 10` autostart lines are not stored in the host file.
+
+## Testing on WSL2 (Windows 11) with Nix flakes
+
+WSLg gives WSL2 a display and audio, so the SDL2 build runs as-is:
+
 ```bash
-cd ~
-wget -O "fuse-${FUSE_VER}.tar.gz" "https://sourceforge.net/projects/fuse-emulator/files/fuse/${FUSE_VER}/fuse-${FUSE_VER}.tar.gz/download"
-tar xf "fuse-${FUSE_VER}.tar.gz" && cd "fuse-${FUSE_VER}"
-./configure --without-gtk --with-sdl      # summary should show UI = SDL, SDL2 detected
-make -j4 && sudo make install && sudo ldconfig && cd ~
+nix run github:mucsi96/zx-spectrum            # boot to the NextZXOS menu
+nix run github:mucsi96/zx-spectrum#spectrum -- 06-ratespiel   # boot into a program
 ```
 
-To find the current newest versions by hand, browse
-<https://sourceforge.net/projects/fuse-emulator/files/fuse/> and
-<https://sourceforge.net/projects/fuse-emulator/files/libspectrum/>.
-The binary is **`/usr/local/bin/fuse`** (a source SDL build is named `fuse`, not `fuse-sdl`),
-and it bundles its own ROMs.
+or from a checkout: `nix develop`, then `nix run .#spectrum`. The runner
 
-**Verify it linked SDL2, not the compat layer:**
+- builds ZEsarUX `7d33f6b` with the patch applied (pinned via flake input),
+- keeps state in `~/.local/share/zx-spectrum-next/` (private `tbblue.mmc`
+  copy + the `programs/` host directory),
+- seeds missing programs from the repo's text listings (tokenizing them on
+  the fly), never overwriting your saved work.
+
+First ever NextZXOS boot shows its video-mode test card once — press ENTER.
+Press **F10** to quit the emulator.
+
+## Installing the Raspberry Pi kiosk over SSH (Ansible)
+
+Flash Raspberry Pi OS Lite with SSH enabled (Imager settings), then:
+
 ```bash
-ldd /usr/local/bin/fuse | grep -i sdl      # want: libSDL2-2.0.so.0
+cd ansible
+cp inventory.example.ini inventory.ini    # set your host/user
+ansible-playbook -i inventory.ini playbook.yml
 ```
 
-**Autostart** — put exactly this (and nothing more) in `~/.bash_profile`. It hides the status icons
-and inserts (without auto-running) the persistent tape for SAVE/LOAD:
-```bash
-if [ "$(tty)" = "/dev/tty1" ]; then
-    if [ -f "$HOME/tape.tzx" ]; then
-        fuse --full-screen --no-statusbar --no-auto-load --tape "$HOME/tape.tzx"
-    else
-        fuse --full-screen --no-statusbar
-    fi
-fi
-```
-Create the empty tape once: `printf 'ZXTape!\x1a\x01\x14' > ~/tape.tzx`
+The playbook (idempotent — safe to re-run):
 
----
+- installs build deps, fetches ZEsarUX at the pinned revision, applies the
+  patch, builds with SDL2 (KMS/DRM — no X server) and installs it
+  (rebuilds only when the revision or the patch changes),
+- installs `spectrum-launcher.sh` and starts it on tty1 via console
+  autologin,
+- seeds `~/programs` with tokenized versions of `programs/*.bas`
+  (existing files are never overwritten — the kid's work wins),
+- lets the kiosk user power off from the menu without a password.
 
-## Troubleshooting
+## The launcher
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| `apt` Fuse: black screen under kmsdrm | 1.6.0 is SDL1.2 via sdl12-compat; GL-scaling fails headless | Build 1.8.0 with native SDL2 |
-| Fuse launches **3× / loops**, can't exit | `exec` + console autologin: shell is replaced, getty re-logs-in, re-runs Fuse | Use the plain `fuse --full-screen` block — **no `exec`, no `while` loop** |
-| Duplicate launches | The block is in `.bash_profile` more than once (or also in `.profile`) | `grep -n fuse ~/.bash_profile ~/.profile ~/.bashrc` — keep one copy in `.bash_profile` |
-| Locked at black screen with blinking `_` | Shell alive but display left in graphics mode | SSH in and `pkill -f fuse`; or type `reset` blind; or Ctrl+Alt+F2 to another console |
-| `ldd` shows `libSDL-1.2` | `libsdl2-dev` missing at configure time | Install it, rebuild |
-| Imager customisation greyed out / not applied | Old Imager on a Trixie image | Use Imager **2.0.6+** |
-| Verify the GL/KMS stack itself | — | `sudo apt install kmscube && kmscube` → spinning cube = stack OK |
+`spectrum-launcher.sh` shows a `dialog` menu of everything in `~/programs`:
+pick a program and the Next boots straight into it; *New program* boots to
+the NextZXOS menu; *Shut down* powers the Pi off. The menu sizes itself to
+the console, so all rows of the display are used for program entries —
+no scrolling until the list outgrows the screen. F10 in the emulator
+returns to the menu.
 
-> **Note on `SDL_KMSDRM_DEVICE_INDEX`:** you only need this with the old SDL1.2/compat build,
-> which sometimes grabs the render-only DRM node. The native-SDL2 Fuse 1.8.0 selects the
-> connected display node itself, so no index variable is required.
+## Program files
 
----
+- On the host, programs are raw tokenized BASIC. Convert to and from
+  editable text listings:
 
-## Version notes
+  ```bash
+  tools/nextbas.py detokenize ~/programs/game.bas game.txt
+  tools/nextbas.py tokenize   game.txt ~/programs/game.bas
+  ```
 
-- Fuse **1.9.0** (mid-2026) also has SDL2 and works with the same steps — just change the
-  version numbers in the URLs. It may want a newer libspectrum; the source-build fallback covers that.
-- Debian sid already packages `fuse-emulator-sdl 1.8.0`, so a future Raspberry Pi OS may ship a
-  native-SDL2 Fuse. After any `apt` install, check with `ldd $(which fuse-sdl) | grep -i sdl`; if
-  it shows `libSDL2`, you can skip the source build entirely.
-- No-Imager path: cloud-init also reads hand-written `user-data` + `network-config` (+ an empty
-  `meta-data`) placed directly on the boot partition. `network-config` is netplan v2, e.g. a
-  `wifis:` block with your SSID/password. Imager just spares you the YAML and the password hashing.
+- The listings in `programs/` stay in text form in the repo; deployment
+  (flake runner, Ansible) tokenizes them on the way in.
