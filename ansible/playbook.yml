@@ -34,8 +34,6 @@
           - libsdl2-dev
           - libasound2-dev
           - dialog
-          - nano
-          - vim
 
     - name: Check whether this ZEsarUX build is already installed
       ansible.builtin.slurp:
@@ -133,30 +131,6 @@
         force: false
       with_fileglob:
         - "{{ playbook_dir }}/../programs/*.bas"
-
-    - name: Install BASIC syntax highlighting for nano
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../editor/nano/nextbasic.nanorc"
-        dest: /usr/share/nano/nextbasic.nanorc
-        mode: "0644"
-
-    - name: Create vim runtime directories
-      ansible.builtin.file:
-        path: "/usr/share/vim/vimfiles/{{ item }}"
-        state: directory
-        mode: "0755"
-      loop:
-        - syntax
-        - ftdetect
-
-    - name: Install BASIC syntax highlighting for vim
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../editor/vim/{{ item }}"
-        dest: "/usr/share/vim/vimfiles/{{ item }}"
-        mode: "0644"
-      loop:
-        - syntax/nextbasic.vim
-        - ftdetect/nextbasic.vim
 
     - name: Allow kiosk user to power off without password
       ansible.builtin.copy:

@@ -158,29 +158,3 @@ Host programs are ordinary text listings:
 `SAVE` in the emulator writes exactly this format, so the files in
 `programs/` and the files a kid saves on the kiosk are the same thing —
 copy them back into the repo to version new programs.
-
-## Syntax highlighting
-
-The `editor/` directory colours the listings SpecNext-IDE-style — bright
-Spectrum palette on a dark background — in the editors you're likely to
-touch them with:
-
-- **VS Code** (WSL2 or anywhere): `editor/vscode/` is a ready extension
-  with a NextBASIC grammar and a "SpecNext Dark" colour theme. Install by
-  linking it into your extensions directory and reloading:
-
-  ```bash
-  ln -s "$PWD/editor/vscode" ~/.vscode/extensions/nextbasic-listings          # local VS Code
-  ln -s "$PWD/editor/vscode" ~/.vscode-server/extensions/nextbasic-listings   # WSL2 remote
-  ```
-
-  The grammar highlights statements, functions, numbers, strings, `REM`
-  comments, line numbers, block graphics and the `\a`…`\u`/`\xHH` escapes,
-  and works with any theme; pick *SpecNext Dark* for the full look.
-
-- **nano / vim on the Pi**: installed by the Ansible playbook
-  (`nextbasic.nanorc`, `nextbasic.vim`), so `nano ~/programs/game.bas`
-  over SSH is highlighted too.
-
-- **GitHub**: `.gitattributes` marks `*.bas` as BASIC so the repo view is
-  highlighted as well.
