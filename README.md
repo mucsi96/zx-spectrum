@@ -133,6 +133,7 @@ WSLg gives WSL2 a display and audio, so the SDL2 build runs as-is:
 ```bash
 nix run github:mucsi96/zx-spectrum            # boot to the NextZXOS menu
 nix run github:mucsi96/zx-spectrum#spectrum -- 06-ratespiel   # boot into a program
+nix run github:mucsi96/zx-spectrum#menu       # the kiosk program-picker menu
 ```
 
 or from a checkout: `nix develop`, then `nix run .#spectrum`. The runner

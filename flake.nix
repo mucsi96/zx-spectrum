@@ -111,6 +111,28 @@
           '';
         };
 
+        # `nix run .#menu` — the kiosk program-picker menu, like on the Pi.
+        # Uses the same state directory as the `spectrum` runner.
+        menu = pkgs.writeShellApplication {
+          name = "spectrum-menu";
+          runtimeInputs = [ zesarux-next pkgs.dialog pkgs.ncurses ];
+          text = ''
+            data="''${XDG_DATA_HOME:-$HOME/.local/share}/zx-spectrum-next"
+            mkdir -p "$data/programs"
+            if [ -d programs ]; then
+              for src in programs/*.bas; do
+                [ -e "$src" ] || continue
+                dst="$data/programs/$(basename "$src")"
+                [ -e "$dst" ] || cp "$src" "$dst"
+              done
+            fi
+            export SPECTRUM_PROGRAMS="$data/programs"
+            export SPECTRUM_MMC="$data/tbblue.mmc"
+            export ZESARUX="${zesarux-next}/bin/zesarux"
+            exec bash ${./spectrum-launcher.sh}
+          '';
+        };
+
         default = spectrum;
       });
 
@@ -118,6 +140,10 @@
         spectrum = {
           type = "app";
           program = "${self.packages.${pkgs.system}.spectrum}/bin/spectrum";
+        };
+        menu = {
+          type = "app";
+          program = "${self.packages.${pkgs.system}.menu}/bin/spectrum-menu";
         };
         default = spectrum;
       });

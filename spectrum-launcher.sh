@@ -19,10 +19,20 @@
 
 set -u
 
-PROGRAMS="$HOME/programs"
-ZESARUX="/usr/local/bin/zesarux"                     # the patched build
-SHARE="/usr/local/share/zesarux"
-MMC="$HOME/tbblue.mmc"                               # private writable SD image
+PROGRAMS="${SPECTRUM_PROGRAMS:-$HOME/programs}"
+MMC="${SPECTRUM_MMC:-$HOME/tbblue.mmc}"              # private writable SD image
+
+# The patched build: /usr/local on the Pi kiosk; on other machines take it
+# from PATH (e.g. nix run .#menu puts it there) or the ZESARUX variable
+ZESARUX="${ZESARUX:-$(command -v zesarux || echo /usr/local/bin/zesarux)}"
+SHARE="${ZESARUX_SHARE:-$(dirname "$ZESARUX")/../share/zesarux}"
+
+if [ ! -x "$ZESARUX" ]; then
+  echo "zesarux not found ($ZESARUX)."
+  echo "On the Pi: run the Ansible playbook first."
+  echo "On a Nix machine: use    nix run .#menu"
+  exit 1
+fi
 
 ZOPTS=( --machine tbblue --enable-mmc --enable-divmmc-ports
         --mmc-file "$MMC"
@@ -54,7 +64,7 @@ while true; do
   done
   shopt -u nullglob
 
-  menu+=( "off" "Shut down" )
+  menu+=( "off" "Shut down (kiosk) / exit menu" )
 
   # Fill the whole console: dialog needs 7 rows of chrome around the list,
   # so every remaining row shows one program — no scrolling until the
@@ -73,7 +83,12 @@ while true; do
   clear
   case "$choice" in
     new)  ZESARUX_NEXTBASIC_AUTOLOAD="-" "$ZESARUX" "${ZOPTS[@]}" ;;
-    off)  clear; sudo systemctl poweroff ;;   # local console: allowed via polkit
+    off)  clear
+          if [ "$(tty)" = "/dev/tty1" ]; then
+            sudo systemctl poweroff             # the kiosk console
+          else
+            exit 0                              # desktop/WSL2: just leave
+          fi ;;
     *)    ZESARUX_NEXTBASIC_AUTOLOAD="$(basename "${map[$choice]}" .bas)" \
             "$ZESARUX" "${ZOPTS[@]}" ;;
   esac
