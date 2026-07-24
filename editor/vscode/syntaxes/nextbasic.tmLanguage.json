@@ -1,0 +1,78 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "NextBASIC listing",
+  "scopeName": "source.nextbasic",
+  "patterns": [
+    { "include": "#line-number" },
+    { "include": "#string" },
+    { "include": "#comment" },
+    { "include": "#zx-escape" },
+    { "include": "#statement" },
+    { "include": "#function" },
+    { "include": "#word-operator" },
+    { "include": "#number" },
+    { "include": "#operator" },
+    { "include": "#variable" }
+  ],
+  "repository": {
+    "line-number": {
+      "match": "^\\s*(\\d+)",
+      "captures": {
+        "1": { "name": "constant.numeric.line-number.nextbasic" }
+      }
+    },
+    "comment": {
+      "match": "\\b(REM)\\b(.*)$",
+      "captures": {
+        "1": { "name": "keyword.control.rem.nextbasic" },
+        "2": { "name": "comment.line.rem.nextbasic" }
+      }
+    },
+    "string": {
+      "begin": "\"",
+      "end": "\"",
+      "name": "string.quoted.double.nextbasic",
+      "patterns": [
+        { "include": "#zx-escape" }
+      ]
+    },
+    "zx-escape": {
+      "patterns": [
+        {
+          "comment": "Block graphics as Unicode quadrant characters",
+          "match": "[▘▝▀▖▌▞▛▗▚▐▜▄▙▟█]+",
+          "name": "constant.character.escape.block-graphics.nextbasic"
+        },
+        {
+          "comment": "UDGs \\a..\\u, hex escapes \\xHH, backslash, zmakebas block escapes",
+          "match": "\\\\(\\\\|[a-uA-U]|[xX][0-9A-Fa-f]{2}|[.',:]{2})",
+          "name": "constant.character.escape.nextbasic"
+        }
+      ]
+    },
+    "statement": {
+      "match": "\\b(GO TO|GO SUB|GOTO|GOSUB|DEF FN|DEFFN|OPEN #|CLOSE #|PRINT|LPRINT|INPUT|LET|DIM|READ|DATA|RESTORE|FOR|NEXT|IF|THEN|ELSE|RUN|STOP|CONTINUE|RETURN|PAUSE|POKE|RANDOMIZE|CLS|CLEAR|NEW|LIST|LLIST|LOAD|SAVE|MERGE|VERIFY|ERASE|CAT|FORMAT|MOVE|BEEP|BORDER|PLOT|DRAW|CIRCLE|INK|PAPER|FLASH|BRIGHT|INVERSE|OVER|OUT|COPY)(?![\\w$])",
+      "name": "keyword.control.statement.nextbasic"
+    },
+    "function": {
+      "match": "\\b(RND|INKEY\\$|PI|FN|POINT|SCREEN\\$|ATTR|AT|TAB|VAL\\$|CODE|VAL|LEN|SIN|COS|TAN|ASN|ACS|ATN|LN|EXP|INT|SQR|SGN|ABS|PEEK|IN|USR|STR\\$|CHR\\$|BIN)(?![\\w$])",
+      "name": "support.function.nextbasic"
+    },
+    "word-operator": {
+      "match": "\\b(AND|OR|NOT|TO|STEP|LINE)(?![\\w$])",
+      "name": "keyword.operator.word.nextbasic"
+    },
+    "number": {
+      "match": "(?<![\\w$])\\d+(\\.\\d+)?([eE][+-]?\\d+)?",
+      "name": "constant.numeric.nextbasic"
+    },
+    "operator": {
+      "match": "<=|>=|<>|[-+*/^=<>]",
+      "name": "keyword.operator.nextbasic"
+    },
+    "variable": {
+      "match": "[A-Za-z][A-Za-z0-9]*\\$?",
+      "name": "variable.other.nextbasic"
+    }
+  }
+}

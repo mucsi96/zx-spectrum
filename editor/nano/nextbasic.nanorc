@@ -1,0 +1,28 @@
+# Nano syntax highlighting for NextBASIC plain-text listings
+# (ZX Spectrum Next kiosk) - bright Spectrum palette on the console.
+
+syntax "nextbasic" "\.bas$"
+
+# Variables and everything else default to the terminal foreground.
+
+# Numbers
+color magenta "\<[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?\>"
+
+# Functions
+color brightcyan "\<(RND|INKEY\$|PI|FN|POINT|SCREEN\$|ATTR|AT|TAB|VAL\$|CODE|VAL|LEN|SIN|COS|TAN|ASN|ACS|ATN|LN|EXP|INT|SQR|SGN|ABS|PEEK|IN|USR|STR\$|CHR\$|BIN)\>"
+
+# Statements and word operators
+color brightyellow "\<(GO TO|GO SUB|GOTO|GOSUB|DEF FN|PRINT|LPRINT|INPUT|LET|DIM|READ|DATA|RESTORE|FOR|NEXT|IF|THEN|ELSE|RUN|STOP|CONTINUE|RETURN|PAUSE|POKE|RANDOMIZE|CLS|CLEAR|NEW|LIST|LLIST|LOAD|SAVE|MERGE|VERIFY|ERASE|CAT|FORMAT|MOVE|BEEP|BORDER|PLOT|DRAW|CIRCLE|INK|PAPER|FLASH|BRIGHT|INVERSE|OVER|OUT|COPY|AND|OR|NOT|TO|STEP|LINE)\>"
+
+# Strings
+color brightgreen ""[^"]*""
+
+# ZX escapes (UDGs, hex, zmakebas blocks) and Unicode block graphics
+color brightred "\\(\\|[a-uA-U]|[xX][0-9A-Fa-f][0-9A-Fa-f]|[.',:][.',:])"
+color brightred "[▘▝▀▖▌▞▛▗▚▐▜▄▙▟█]+"
+
+# Line numbers at the start of a line
+color grey "^[[:space:]]*[0-9]+"
+
+# REM comments
+color grey "\<REM\>.*$"
