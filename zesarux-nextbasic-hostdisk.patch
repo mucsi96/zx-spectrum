@@ -5,19 +5,24 @@ What it does
     On the ZX Spectrum Next machine (--machine tbblue, NextZXOS/NextBASIC),
     makes the BASIC commands SAVE / LOAD / MERGE / ERASE with a plain
     filename (no drive letter, no path, no extension) operate directly on
-    raw tokenized BASIC files in a host directory:
+    files in a host directory:
 
-        SAVE "lib"   -> writes <dir>/lib.bas
-        LOAD "game"  -> reads  <dir>/game.bas
-        MERGE "lib"  -> merges <dir>/lib.bas
+        SAVE "lib"   -> writes <hostdir>/lib.bas
+        LOAD "game"  -> reads  <hostdir>/game.bas
+        MERGE "lib"  -> merges <hostdir>/lib.bas
         SAVE "@"     -> re-saves to the last file opened through the handler
-        ERASE "lib"  -> deletes <dir>/lib.bas
+        ERASE "lib"  -> deletes <hostdir>/lib.bas
 
-    Host files are RAW tokenized BASIC with no 128-byte PLUS3DOS header:
-    the header is synthesized on LOAD and stripped on SAVE (variables area
-    is also stripped, keeping the file a clean tokenized listing). Saves
-    are atomic (temp file + rename). Filename matching against the host
-    directory is case-insensitive.
+    Host .bas files are PLAIN TEXT BASIC LISTINGS - one numbered line per
+    text line, exactly like the output of LIST - so they can be edited and
+    versioned host-side with any editor. SAVE detokenizes the program to
+    text; LOAD tokenizes it back (classic 48K keyword set, including the
+    hidden 0Eh five-byte number forms; BIN literals are encoded as binary).
+    Legacy raw tokenized files (first byte 0) are still accepted on LOAD.
+    The 128-byte PLUS3DOS header never touches the host: it is synthesized
+    on LOAD and stripped on SAVE, and the variables area is stripped too.
+    Saves are atomic (temp file + rename) and filename matching against the
+    host directory is case-insensitive.
 
     (SAVE "" cannot be used for re-saving: the NextBASIC ROM rejects the
     empty filename with "Invalid file name" before it ever reaches the
@@ -42,7 +47,7 @@ Activation
                 --enable-mmc --enable-divmmc-ports
 
     Optionally, ZESARUX_NEXTBASIC_AUTOLOAD=<name> boots straight into
-    <dir>/<name>.bas: the handler serves a synthetic
+    <hostdir>/<name>.bas: the handler serves a synthetic
     c:/nextzxos/autoexec.bas ("10 LOAD "<name>"") and gives the loaded
     program an autostart line, so it LOADs and RUNs unattended.
     ZESARUX_NEXTBASIC_AUTOLOAD=- serves an empty autoexec instead, which
@@ -61,8 +66,9 @@ How to apply (against https://github.com/chernandezba/zesarux master)
 
 Verified
     Against ZEsarUX master 7d33f6b (13.1-SN, July 2026) with the bundled
-    tbblue.mmc (NextZXOS 2.06H): SAVE, LOAD, MERGE, LIST, RUN, ERASE,
-    SAVE "@", autoload boot, and untouched NextZXOS boot/Browser access.
+    tbblue.mmc (NextZXOS 2.06H): SAVE producing text listings, LOAD/LIST/
+    RUN of text listings, MERGE, ERASE, SAVE "@", autoload boot, and
+    untouched NextZXOS boot/Browser access.
 
 diff --git a/src/cores/core_spectrum.c b/src/cores/core_spectrum.c
 index 9e0d179..59c9fe2 100644
@@ -77,7 +83,7 @@ index 9e0d179..59c9fe2 100644
  
      //Gestionar autoload
 diff --git a/src/storage/plus3dos_handler.c b/src/storage/plus3dos_handler.c
-index da8d4cf..df0979c 100644
+index da8d4cf..06067ff 100644
 --- a/src/storage/plus3dos_handler.c
 +++ b/src/storage/plus3dos_handler.c
 @@ -35,6 +35,8 @@ PLUS3DOS handler
@@ -97,7 +103,7 @@ index da8d4cf..df0979c 100644
  
  
  z80_bit plus3dos_traps={0};
-@@ -1180,3 +1183,650 @@ ENTRY CONDITIONS
+@@ -1180,3 +1183,931 @@ ENTRY CONDITIONS
  
  
  
@@ -117,8 +123,12 @@ index da8d4cf..df0979c 100644
 +    SAVE ""      -> re-saves to the last file opened through this handler
 +    ERASE "lib"  -> deletes <dir>/lib.bas
 +
-+Host files are raw tokenized BASIC without the 128-byte PLUS3DOS header;
-+the header is synthesized on LOAD and stripped on SAVE. Saves are written
++Host files are PLAIN TEXT BASIC listings (one numbered line per text line,
++like the output of LIST): SAVE detokenizes the program to text and LOAD
++tokenizes it back, so the files can be edited and versioned host-side with
++any editor. Files that are already raw tokenized BASIC (first byte 0) are
++still accepted on LOAD. The 128-byte PLUS3DOS header never touches the
++host: it is synthesized on LOAD and stripped on SAVE. Saves are written
 +atomically (temp file + rename).
 +
 +It works by trapping the +3DOS API jump table entries (DOS_OPEN 0106h,
@@ -322,6 +332,248 @@ index da8d4cf..df0979c 100644
 +    while (i>0 && name[i-1]==' ') name[--i]=0;
 +}
 +
++/*
++Text listing <-> tokenized BASIC conversion. The host files are plain text;
++the machine wants the classic Sinclair tokenized form (48K token set, which
++is what NextBASIC uses for these keywords), with every number literal
++followed by its hidden 0Eh + 5 byte binary form.
++*/
++
++//Tokens A5h..FFh
++static const char *nbhd_token_names[]={
++    "RND","INKEY$","PI","FN","POINT","SCREEN$","ATTR","AT","TAB","VAL$",
++    "CODE","VAL","LEN","SIN","COS","TAN","ASN","ACS","ATN","LN","EXP",
++    "INT","SQR","SGN","ABS","PEEK","IN","USR","STR$","CHR$","NOT","BIN",
++    "OR","AND","<=",">=","<>","LINE","THEN","TO","STEP","DEF FN","CAT",
++    "FORMAT","MOVE","ERASE","OPEN #","CLOSE #","MERGE","VERIFY","BEEP",
++    "CIRCLE","INK","PAPER","FLASH","BRIGHT","INVERSE","OVER","OUT",
++    "LPRINT","LLIST","STOP","READ","DATA","RESTORE","NEW","BORDER",
++    "CONTINUE","DIM","REM","FOR","GO TO","GO SUB","INPUT","LOAD","LIST",
++    "LET","PAUSE","NEXT","POKE","PRINT","PLOT","RUN","SAVE","RANDOMIZE",
++    "IF","CLS","DRAW","CLEAR","RETURN","COPY"
++};
++#define NBHD_TOKEN_BASE 0xA5
++#define NBHD_NUM_TOKENS 91
++#define NBHD_TOKEN_REM 0xEA
++#define NBHD_TOKEN_BIN 0xC4
++
++static int nbhd_is_word_char(char c)
++{
++    return ( (c>='A' && c<='Z') || (c>='a' && c<='z') || (c>='0' && c<='9') || c=='$' );
++}
++
++//5-byte ZX Spectrum representation of a (non-negative) number
++static void nbhd_zx_number(double value,z80_byte *out)
++{
++    if (value==(double)(unsigned int)value && value<=65535.0) {
++        unsigned int n=(unsigned int)value;
++        out[0]=0; out[1]=0; out[2]=n&0xFF; out[3]=(n>>8)&0xFF; out[4]=0;
++        return;
++    }
++    //full float: value = m * 2^e with 0.5 <= m < 1
++    double m=value;
++    int e=0;
++    while (m>=1.0) { m /=2.0; e++; }
++    while (m<0.5)  { m *=2.0; e--; }
++    double scaled=m*4294967296.0+0.5;
++    unsigned long mantissa=(unsigned long)scaled;
++    if (mantissa>=4294967296UL) { mantissa >>=1; e++; }
++    out[0]=(e+128)&0xFF;
++    out[1]=((mantissa>>24)&0x7F); //top bit 0 = positive
++    out[2]=(mantissa>>16)&0xFF;
++    out[3]=(mantissa>>8)&0xFF;
++    out[4]=mantissa&0xFF;
++}
++
++//Tokenizes the text of one BASIC line (without the line number) into out.
++//Returns the number of bytes written (excluding the final 0Dh), or -1 if
++//the result would not fit
++static int nbhd_tokenize_line(const char *text,z80_byte *out,int outmax)
++{
++    int len=0;
++    int i=0;
++    int after_bin=0;
++
++    while (text[i]) {
++        char c=text[i];
++
++        if (len>=outmax-8) return -1;
++
++        if (c=='"') {
++            out[len++]=c;
++            i++;
++            while (text[i]) {
++                if (len>=outmax-8) return -1;
++                out[len++]=text[i];
++                i++;
++                if (out[len-1]=='"') break;
++            }
++            continue;
++        }
++
++        if ( (c>='0' && c<='9') || (c=='.' && text[i+1]>='0' && text[i+1]<='9') ) {
++            int j=i;
++            while ( (text[j]>='0' && text[j]<='9') || text[j]=='.' ) j++;
++            if ( (text[j]=='e' || text[j]=='E') &&
++                 ( (text[j+1]>='0' && text[j+1]<='9') || text[j+1]=='+' || text[j+1]=='-' ) ) {
++                j +=2;
++                while (text[j]>='0' && text[j]<='9') j++;
++            }
++            if (len+(j-i)+6>=outmax-2) return -1;
++            char literal[64];
++            int litlen=j-i;
++            if (litlen>=(int)sizeof(literal)) return -1;
++            memcpy(literal,&text[i],litlen);
++            literal[litlen]=0;
++            memcpy(&out[len],literal,litlen);
++            len +=litlen;
++            out[len++]=0x0E;
++            double value=(after_bin ? (double)strtol(literal,NULL,2) : strtod(literal,NULL));
++            nbhd_zx_number(value,&out[len]);
++            len +=5;
++            after_bin=0;
++            i=j;
++            continue;
++        }
++
++        //keyword, only at a word boundary
++        int matched=-1;
++        int matched_len=0;
++        if (i==0 || !nbhd_is_word_char(text[i-1])) {
++            int t;
++            for (t=0;t<NBHD_NUM_TOKENS+3;t++) {
++                //three extra spellings: GOTO, GOSUB, DEFFN
++                const char *kw;
++                z80_byte code;
++                if (t<NBHD_NUM_TOKENS) { kw=nbhd_token_names[t]; code=NBHD_TOKEN_BASE+t; }
++                else if (t==NBHD_NUM_TOKENS)   { kw="GOTO";  code=0xEC; }
++                else if (t==NBHD_NUM_TOKENS+1) { kw="GOSUB"; code=0xED; }
++                else                           { kw="DEFFN"; code=0xCE; }
++                int kl=strlen(kw);
++                if (kl<=matched_len) continue;
++                if (strncmp(&text[i],kw,kl)) continue;
++                char last=kw[kl-1];
++                char next=text[i+kl];
++                if (nbhd_is_word_char(last) && next && nbhd_is_word_char(next)) continue;
++                matched=code;
++                matched_len=kl;
++            }
++        }
++
++        if (matched>=0) {
++            out[len++]=matched;
++            i +=matched_len;
++            if (text[i]==' ') i++; //LIST re-creates this space
++            if (matched==NBHD_TOKEN_REM) {
++                while (text[i]) {
++                    if (len>=outmax-2) return -1;
++                    out[len++]=text[i++];
++                }
++            }
++            if (matched==NBHD_TOKEN_BIN) after_bin=1;
++            continue;
++        }
++
++        if (c==' ') { i++; continue; } //spacing is re-created by LIST
++
++        out[len++]=c;
++        i++;
++    }
++
++    return len;
++}
++
++//Parses a whole text listing into the file buffer (tokenized program).
++//Returns 0 on failure
++static int nbhd_tokenize_text(struct s_nbhd_file *f,const char *text,int textlen)
++{
++    int pos=0;
++    f->size=0;
++
++    while (pos<textlen) {
++        //one text line
++        char line[1024];
++        int ll=0;
++        while (pos<textlen && text[pos]!='\n') {
++            char c=text[pos++];
++            if (c!='\r' && ll<(int)sizeof(line)-1) line[ll++]=c;
++        }
++        if (pos<textlen) pos++; //skip the newline
++        line[ll]=0;
++
++        //line number
++        int i=0;
++        while (line[i]==' ') i++;
++        if (!(line[i]>='0' && line[i]<='9')) continue; //skip blank/malformed lines
++        int number=0;
++        while (line[i]>='0' && line[i]<='9') number=number*10+(line[i++]-'0');
++        if (number>9999) continue;
++        while (line[i]==' ') i++;
++
++        z80_byte content[1024];
++        int clen=nbhd_tokenize_line(&line[i],content,sizeof(content));
++        if (clen<0) return 0;
++
++        if (!nbhd_ensure_capacity(f,f->size+4+clen+1)) return 0;
++        f->buf[f->size++]=(number>>8)&0xFF; //line number, big endian
++        f->buf[f->size++]=number&0xFF;
++        f->buf[f->size++]=(clen+1)&0xFF;    //line length, little endian
++        f->buf[f->size++]=((clen+1)>>8)&0xFF;
++        memcpy(&f->buf[f->size],content,clen);
++        f->size +=clen;
++        f->buf[f->size++]=0x0D;
++    }
++
++    return 1;
++}
++
++//Renders size bytes of tokenized program as a text listing. Returns a
++//malloc'd string and stores its length in *out_len
++static char *nbhd_detokenize(const z80_byte *body,int size,int *out_len)
++{
++    int cap=size*12+64;
++    char *text=malloc(cap);
++    if (text==NULL) return NULL;
++    int len=0;
++
++    int pos=0;
++    while (pos+4<=size) {
++        int number=(body[pos]<<8)|body[pos+1];
++        int llen=body[pos+2]|(body[pos+3]<<8);
++        int end=pos+4+llen;
++        if (end>size) end=size;
++        pos +=4;
++
++        len +=sprintf(&text[len],"%d ",number);
++
++        int in_string=0;
++        while (pos<end) {
++            z80_byte b=body[pos];
++            if (b==0x0D) { pos++; break; }
++            if (!in_string && b==0x0E) { pos +=6; continue; } //hidden number form
++            if (b=='"') in_string=!in_string;
++            if (!in_string && b>=NBHD_TOKEN_BASE) {
++                const char *kw=nbhd_token_names[b-NBHD_TOKEN_BASE];
++                if (len && text[len-1]!=' ') text[len++]=' ';
++                len +=sprintf(&text[len],"%s ",kw);
++            }
++            else {
++                text[len++]=(b>=32 && b<127) ? (char)b : '?';
++            }
++            pos++;
++        }
++
++        while (len && text[len-1]==' ') len--; //no trailing spaces
++        text[len++]='\n';
++
++        if (len>cap-1200) break; //can not happen with the cap above, but be safe
++    }
++
++    text[len]=0;
++    *out_len=len;
++    return text;
++}
++
 +//Serves a synthetic autoexec.bas: "10 LOAD "<name>"" (or "10 REM" for "-")
 +static void nbhd_serve_autoexec(z80_byte fnum)
 +{
@@ -416,29 +668,47 @@ index da8d4cf..df0979c 100644
 +    }
 +
 +    fseek(host,0,SEEK_END);
-+    int size=ftell(host);
++    int rawsize=ftell(host);
 +    fseek(host,0,SEEK_SET);
-+    if (size<0) size=0;
-+    if (size>0xFFFF) size=0xFFFF; //BASIC files can never be bigger anyway
++    if (rawsize<0) rawsize=0;
++    if (rawsize>0x40000) rawsize=0x40000;
 +
-+    if (!nbhd_ensure_capacity(f,size)) {
++    char *raw=malloc(rawsize+1);
++    if (raw==NULL || (rawsize>0 && fread(raw,1,rawsize,host)!=(size_t)rawsize)) {
++        if (raw!=NULL) free(raw);
 +        fclose(host);
-+        nbhd_return_error(23);
-+        return;
-+    }
-+
-+    if (fread(f->buf,1,size,host)!=(size_t)size) {
-+        fclose(host);
-+        nbhd_free_file(f);
 +        nbhd_return_error(23);
 +        return;
 +    }
 +    fclose(host);
++    raw[rawsize]=0;
 +
-+    debug_printf(VERBOSE_INFO,"NextBASIC host disk: open for read: %s (%d bytes)",path,size);
++    int ok;
++    if (rawsize>0 && raw[0]==0) {
++        //legacy raw tokenized file: use as-is
++        if (rawsize>0xFFFF) rawsize=0xFFFF;
++        ok=nbhd_ensure_capacity(f,rawsize);
++        if (ok) {
++            memcpy(f->buf,raw,rawsize);
++            f->size=rawsize;
++        }
++    }
++    else {
++        //plain text listing: tokenize
++        ok=nbhd_tokenize_text(f,raw,rawsize);
++    }
++    free(raw);
++
++    if (!ok || f->size>0xFFFF) {
++        nbhd_free_file(f);
++        nbhd_return_error(23);
++        return;
++    }
++
++    int size=f->size;
++    debug_printf(VERBOSE_INFO,"NextBASIC host disk: open for read: %s (%d bytes tokenized)",path,size);
 +
 +    f->inuse=1;
-+    f->size=size;
 +    strcpy(f->name,name);
 +    strcpy(nbhd_last_name,name);
 +
@@ -487,16 +757,33 @@ index da8d4cf..df0979c 100644
 +        //overwrite an existing file even if it differs in case
 +        nbhd_find_host_file(f->name,path);
 +
++        //A BASIC program is stored host-side as a plain text listing;
++        //anything else (CODE blocks...) is stored as raw bytes
++        char *text=NULL;
++        int text_len=0;
++        if (type==0) {
++            text=nbhd_detokenize(f->buf,save_size,&text_len);
++            if (text==NULL) {
++                nbhd_free_file(f);
++                nbhd_return_error(26); //Disk full
++                return;
++            }
++        }
++
 +        FILE *host=fopen(tmppath,"wb");
 +        if (host==NULL) {
++            if (text!=NULL) free(text);
 +            nbhd_free_file(f);
 +            nbhd_return_error(26); //Disk full
 +            return;
 +        }
 +
-+        int ok=((int)fwrite(f->buf,1,save_size,host)==save_size);
++        int ok;
++        if (text!=NULL) ok=((int)fwrite(text,1,text_len,host)==text_len);
++        else ok=((int)fwrite(f->buf,1,save_size,host)==save_size);
 +        if (fclose(host)!=0) ok=0;
 +        if (ok && rename(tmppath,path)!=0) ok=0;
++        if (text!=NULL) free(text);
 +
 +        debug_printf(VERBOSE_INFO,"NextBASIC host disk: %s %s (%d bytes)",
 +            ok ? "saved" : "FAILED saving",path,save_size);

@@ -34,7 +34,6 @@
           - libsdl2-dev
           - libasound2-dev
           - dialog
-          - python3
 
     - name: Check whether this ZEsarUX build is already installed
       ansible.builtin.slurp:
@@ -93,12 +92,6 @@
             dest: "{{ zesarux_src }}/.kiosk-build-stamp"
             mode: "0644"
 
-    - name: Install BASIC text/tokenized converter
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../tools/nextbas.py"
-        dest: /usr/local/bin/nextbas.py
-        mode: "0755"
-
     - name: Install launcher
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../spectrum-launcher.sh"
@@ -128,31 +121,16 @@
         group: "{{ kiosk_user }}"
         mode: "0755"
 
-    - name: Stage program listings
+    - name: Seed programs (plain text listings; never overwrite saved work)
       ansible.builtin.copy:
         src: "{{ item }}"
-        dest: "/usr/local/share/spectrum-listings/"
-        mode: "0644"
-      with_fileglob:
-        - "{{ playbook_dir }}/../programs/*.bas"
-
-    - name: Seed programs (tokenize listings; never overwrite saved work)
-      ansible.builtin.command:
-        cmd: >
-          python3 /usr/local/bin/nextbas.py tokenize
-          /usr/local/share/spectrum-listings/{{ item | basename }}
-          {{ kiosk_home }}/programs/{{ item | basename }}
-        creates: "{{ kiosk_home }}/programs/{{ item | basename }}"
-      with_fileglob:
-        - "{{ playbook_dir }}/../programs/*.bas"
-
-    - name: Fix ownership of seeded programs
-      ansible.builtin.file:
-        path: "{{ kiosk_home }}/programs"
-        state: directory
-        recurse: true
+        dest: "{{ kiosk_home }}/programs/{{ item | basename }}"
         owner: "{{ kiosk_user }}"
         group: "{{ kiosk_user }}"
+        mode: "0644"
+        force: false
+      with_fileglob:
+        - "{{ playbook_dir }}/../programs/*.bas"
 
     - name: Allow kiosk user to power off without password
       ansible.builtin.copy:

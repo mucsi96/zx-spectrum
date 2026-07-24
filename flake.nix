@@ -66,7 +66,7 @@
         # repo's programs available as host .bas files. Works on WSL2 (WSLg).
         spectrum = pkgs.writeShellApplication {
           name = "spectrum";
-          runtimeInputs = [ zesarux-next pkgs.python3 ];
+          runtimeInputs = [ zesarux-next ];
           text = ''
             data="''${XDG_DATA_HOME:-$HOME/.local/share}/zx-spectrum-next"
             mkdir -p "$data/programs"
@@ -76,18 +76,13 @@
               cp --no-preserve=mode "${zesarux-next}/share/zesarux/tbblue.mmc" "$data/tbblue.mmc"
             fi
 
-            # Seed missing programs from the repo listings (text -> tokenized).
-            # Never overwrites: the host .bas files are the source of truth.
+            # Seed missing programs from the repo listings. Host .bas files
+            # are plain text listings; never overwrite saved work.
             if [ -d programs ]; then
               for src in programs/*.bas; do
                 [ -e "$src" ] || continue
                 dst="$data/programs/$(basename "$src")"
-                [ -e "$dst" ] && continue
-                if [ "$(head -c1 "$src" | od -An -tu1 | tr -d ' ')" = "0" ]; then
-                  cp "$src" "$dst"           # already tokenized
-                else
-                  python3 "${./tools/nextbas.py}" tokenize "$src" "$dst"
-                fi
+                [ -e "$dst" ] || cp "$src" "$dst"
               done
             fi
 
@@ -133,7 +128,6 @@
             echo "ZX Spectrum Next dev shell"
             echo "  nix run .#spectrum            boot NextZXOS (menu)"
             echo "  nix run .#spectrum -- NAME    boot straight into programs/NAME.bas"
-            echo "  tools/nextbas.py              text <-> tokenized .bas converter"
           '';
         };
       });

@@ -12,9 +12,10 @@ a host directory — no SD-image juggling, no tape files:
 | `SAVE "@"`          | re-saves to the last file used           |
 | `ERASE "lib"`       | deletes `~/programs/lib.bas`             |
 
-The `.bas` files are **raw tokenized BASIC** (no 128-byte PLUS3DOS header)
-and are the source of truth: version them, sync them, convert them to/from
-text listings with `tools/nextbas.py`. Everything else on the emulated SD
+The `.bas` files are **plain text BASIC listings** — one numbered line per
+text line, exactly what `LIST` shows — and they are the source of truth:
+edit them in any editor, version them, sync them. SAVE detokenizes the
+program to text, LOAD tokenizes it back. Everything else on the emulated SD
 card (NextZXOS itself, the Browser, demos) keeps working — only plain
 filenames are redirected to the host.
 
@@ -27,8 +28,7 @@ The previous Fuse-based 48K setup is preserved in [README-fuse.md](README-fuse.m
 ```
 zesarux-nextbasic-hostdisk.patch  the emulator patch (single git-apply-able diff)
 spectrum-launcher.sh              console program-picker / kiosk launcher
-tools/nextbas.py                  text listing <-> tokenized .bas converter
-programs/*.bas                    program listings (text; tokenized on deploy)
+programs/*.bas                    program listings (the host format: plain text)
 flake.nix                         Nix flake: patched emulator + `spectrum` runner
 ansible/                          provisioning for the Raspberry Pi over SSH
 ```
@@ -49,9 +49,11 @@ It hooks the +3DOS API jump table (`DOS_OPEN` 0106h, `DOS_READ` 0112h, …)
 that NextZXOS uses for *all* file access, but only when the TBBlue runs in
 +3e mode with the DOS ROM paged in. Plain names are served from the host
 directory; anything with a drive, path, extension or wildcard falls through
-to the real NextZXOS. The PLUS3DOS header is synthesized on LOAD and
-stripped on SAVE (the variables area too, so files stay clean tokenized
-listings), and saves are atomic (temp file + rename).
+to the real NextZXOS. On SAVE the program is detokenized into a text
+listing; on LOAD a listing is tokenized back (classic 48K keyword set,
+including the hidden five-byte number forms — legacy raw tokenized files
+are still accepted). The PLUS3DOS header and the variables area never reach
+the host file, and saves are atomic (temp file + rename).
 
 The patch is inert unless `ZESARUX_NEXTBASIC_DIR` is set:
 
@@ -76,6 +78,8 @@ so no extra downloads are needed.
 - `NEW` returns to the NextZXOS main menu (pick *NextBASIC* to continue).
 - When an auto-loaded program ends, NextZXOS shows its menu.
 - `SAVE "name" LINE 10` autostart lines are not stored in the host file.
+- Exotic characters in strings (UDGs, block graphics) are saved as `?` in
+  the text listing.
 
 ## Testing on WSL2 (Windows 11) with Nix flakes
 
@@ -91,8 +95,8 @@ or from a checkout: `nix develop`, then `nix run .#spectrum`. The runner
 - builds ZEsarUX `7d33f6b` with the patch applied (pinned via flake input),
 - keeps state in `~/.local/share/zx-spectrum-next/` (private `tbblue.mmc`
   copy + the `programs/` host directory),
-- seeds missing programs from the repo's text listings (tokenizing them on
-  the fly), never overwriting your saved work.
+- seeds missing programs from the repo's listings, never overwriting your
+  saved work.
 
 First ever NextZXOS boot shows its video-mode test card once — press ENTER.
 Press **F10** to quit the emulator.
@@ -114,8 +118,8 @@ The playbook (idempotent — safe to re-run):
   (rebuilds only when the revision or the patch changes),
 - installs `spectrum-launcher.sh` and starts it on tty1 via console
   autologin,
-- seeds `~/programs` with tokenized versions of `programs/*.bas`
-  (existing files are never overwritten — the kid's work wins),
+- seeds `~/programs` from `programs/*.bas` (existing files are never
+  overwritten — the kid's work wins),
 - lets the kiosk user power off from the menu without a password.
 
 ## The launcher
@@ -129,13 +133,14 @@ returns to the menu.
 
 ## Program files
 
-- On the host, programs are raw tokenized BASIC. Convert to and from
-  editable text listings:
+Host programs are ordinary text listings:
 
-  ```bash
-  tools/nextbas.py detokenize ~/programs/game.bas game.txt
-  tools/nextbas.py tokenize   game.txt ~/programs/game.bas
-  ```
+```
+10 LET N=INT(RND*100)
+20 PRINT "Auf welche Zahl tippst du?"
+30 INPUT G
+```
 
-- The listings in `programs/` stay in text form in the repo; deployment
-  (flake runner, Ansible) tokenizes them on the way in.
+`SAVE` in the emulator writes exactly this format, so the files in
+`programs/` and the files a kid saves on the kiosk are the same thing —
+copy them back into the repo to version new programs.
