@@ -30,6 +30,7 @@ zesarux-nextbasic-hostdisk.patch   emulator patch 1: host-disk SAVE/LOAD (git-ap
 zesarux-nextbasic-highlight.patch  emulator patch 2: editor syntax highlighting
 spectrum-launcher.sh               console program-picker / kiosk launcher
 programs/*.bas                     program listings (the host format: plain text)
+tools/tzx2bas.py                   converter: old Fuse .tzx/.tap saves -> listings
 flake.nix                          Nix flake: patched emulator + `spectrum` runner
 ansible/                           provisioning for the Raspberry Pi over SSH
 ```
@@ -188,3 +189,22 @@ Host programs are ordinary text listings:
 `SAVE` in the emulator writes exactly this format, so the files in
 `programs/` and the files a kid saves on the kiosk are the same thing —
 copy them back into the repo to version new programs.
+
+## Migrating saves from the old Fuse setup
+
+`tools/tzx2bas.py` converts the tapes the Fuse 48K kiosk wrote
+(`~/tapes/*.tzx` from the savehook patch, or an accumulated `tape.tzx`)
+into listings — one `.bas` per BASIC program found on the tapes:
+
+```bash
+tools/tzx2bas.py ~/tapes -o ~/programs        # a directory of tapes
+tools/tzx2bas.py tape.tzx -o ~/programs       # a single multi-program tape
+```
+
+It reads `.tzx` and `.tap`, verifies block checksums, expands the 48K
+tokens, drops the hidden number bytes and the variables area, and maps
+block graphics/UDGs/`£`/`©` with the same conventions as the emulator —
+so the results LOAD directly in NextBASIC. Existing `.bas` files are
+never overwritten (`--force` to override); CODE/array blocks are skipped
+with a note, and tape-autostart lines are reported (the kiosk launcher
+auto-RUNs programs anyway). Python 3 only, no dependencies.
