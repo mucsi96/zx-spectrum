@@ -1,0 +1,45 @@
+{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1767313136,
+        "narHash": "sha256-16KkgfdYqjaeRGBaYsNrhPRRENs0qzkQVUooNHtoy2w=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "ac62194c3917d5f474c1a844b6fd6da2db95077d",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-25.05",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs",
+        "zesarux-src": "zesarux-src"
+      }
+    },
+    "zesarux-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1784845621,
+        "narHash": "sha256-QHwqjQsGKH1PCwMT0YBFAwlNqRqYkaqTaWOcLI6PP/U=",
+        "owner": "chernandezba",
+        "repo": "zesarux",
+        "rev": "7d33f6bac01612d9b3c6619ffb85a325bf595198",
+        "type": "github"
+      },
+      "original": {
+        "owner": "chernandezba",
+        "repo": "zesarux",
+        "rev": "7d33f6bac01612d9b3c6619ffb85a325bf595198",
+        "type": "github"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
