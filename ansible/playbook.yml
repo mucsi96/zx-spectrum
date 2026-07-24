@@ -1,0 +1,149 @@
+---
+# Provisions a Raspberry Pi (Raspberry Pi OS Lite) as a ZX Spectrum Next
+# kiosk over SSH:
+#
+#   - builds ZEsarUX from source with the NextBASIC host-disk patch
+#   - installs the program-picker launcher with console autologin
+#   - seeds ~/programs with the tokenized versions of the repo's listings
+#
+#   ansible-playbook -i inventory.ini playbook.yml
+#
+# Re-running is cheap: the emulator is only rebuilt when the pinned revision
+# or the patch changes, and the kid's saved programs are never overwritten.
+
+- name: ZX Spectrum Next kiosk
+  hosts: spectrum
+  become: true
+
+  vars:
+    kiosk_user: "{{ ansible_user }}"
+    kiosk_home: "/home/{{ kiosk_user }}"
+    zesarux_repo: "https://github.com/chernandezba/zesarux.git"
+    zesarux_rev: "7d33f6bac01612d9b3c6619ffb85a325bf595198"
+    zesarux_src: /usr/local/src/zesarux
+    patch_files:
+      - "{{ playbook_dir }}/../zesarux-nextbasic-hostdisk.patch"
+      - "{{ playbook_dir }}/../zesarux-nextbasic-highlight.patch"
+    build_stamp: "{{ zesarux_rev }}-{{ lookup('file', patch_files[0]) | hash('sha1') }}-{{ lookup('file', patch_files[1]) | hash('sha1') }}"
+
+  tasks:
+    - name: Install build and runtime packages
+      ansible.builtin.apt:
+        update_cache: true
+        name:
+          - build-essential
+          - git
+          - libsdl2-dev
+          - libasound2-dev
+          - dialog
+
+    - name: Check whether this ZEsarUX build is already installed
+      ansible.builtin.slurp:
+        src: "{{ zesarux_src }}/.kiosk-build-stamp"
+      register: stamp
+      failed_when: false
+
+    - name: Build and install patched ZEsarUX
+      when: stamp.content is not defined or (stamp.content | b64decode | trim) != build_stamp
+      block:
+        - name: Fetch pinned ZEsarUX source
+          ansible.builtin.shell: |
+            set -e
+            if [ ! -d "{{ zesarux_src }}/.git" ]; then
+              git init "{{ zesarux_src }}"
+              git -C "{{ zesarux_src }}" remote add origin "{{ zesarux_repo }}"
+            fi
+            git -C "{{ zesarux_src }}" fetch --depth 1 origin "{{ zesarux_rev }}"
+            git -C "{{ zesarux_src }}" checkout -f "{{ zesarux_rev }}"
+            git -C "{{ zesarux_src }}" clean -fdx src
+          changed_when: true
+
+        - name: Copy patches
+          ansible.builtin.copy:
+            src: "{{ item }}"
+            dest: "{{ zesarux_src }}/{{ item | basename }}"
+            mode: "0644"
+          loop: "{{ patch_files }}"
+
+        - name: Apply patches
+          ansible.builtin.command:
+            cmd: git apply {{ item | basename }}
+            chdir: "{{ zesarux_src }}"
+          changed_when: true
+          loop: "{{ patch_files }}"
+
+        - name: Configure
+          ansible.builtin.command:
+            cmd: ./configure --enable-sdl2
+            chdir: "{{ zesarux_src }}/src"
+          changed_when: true
+
+        - name: Compile (takes a while on a Pi)
+          ansible.builtin.command:
+            cmd: make -j{{ ansible_processor_vcpus | default(4) }}
+            chdir: "{{ zesarux_src }}/src"
+          changed_when: true
+
+        - name: Install to /usr/local
+          ansible.builtin.command:
+            cmd: make install
+            chdir: "{{ zesarux_src }}/src"
+          changed_when: true
+
+        - name: Write build stamp
+          ansible.builtin.copy:
+            content: "{{ build_stamp }}"
+            dest: "{{ zesarux_src }}/.kiosk-build-stamp"
+            mode: "0644"
+
+    - name: Install launcher
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../spectrum-launcher.sh"
+        dest: "{{ kiosk_home }}/spectrum-launcher.sh"
+        owner: "{{ kiosk_user }}"
+        group: "{{ kiosk_user }}"
+        mode: "0755"
+
+    - name: Start launcher on tty1 login
+      ansible.builtin.blockinfile:
+        path: "{{ kiosk_home }}/.bash_profile"
+        create: true
+        owner: "{{ kiosk_user }}"
+        group: "{{ kiosk_user }}"
+        mode: "0644"
+        marker: "# {mark} spectrum kiosk"
+        block: |
+          if [ "$(tty)" = "/dev/tty1" ]; then
+            ~/spectrum-launcher.sh
+          fi
+
+    - name: Create programs directory
+      ansible.builtin.file:
+        path: "{{ kiosk_home }}/programs"
+        state: directory
+        owner: "{{ kiosk_user }}"
+        group: "{{ kiosk_user }}"
+        mode: "0755"
+
+    - name: Seed programs (plain text listings; never overwrite saved work)
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "{{ kiosk_home }}/programs/{{ item | basename }}"
+        owner: "{{ kiosk_user }}"
+        group: "{{ kiosk_user }}"
+        mode: "0644"
+        force: false
+      with_fileglob:
+        - "{{ playbook_dir }}/../programs/*.bas"
+
+    - name: Allow kiosk user to power off without password
+      ansible.builtin.copy:
+        content: "{{ kiosk_user }} ALL=(ALL) NOPASSWD: /usr/bin/systemctl poweroff\n"
+        dest: /etc/sudoers.d/spectrum-poweroff
+        mode: "0440"
+        validate: visudo -cf %s
+
+    - name: Enable console autologin on tty1
+      ansible.builtin.command:
+        cmd: raspi-config nonint do_boot_behaviour B2
+      changed_when: false

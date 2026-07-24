@@ -1,0 +1,1182 @@
+ZEsarUX (ZX Spectrum Next / tbblue) - NextBASIC host-disk LOAD/SAVE
+===================================================================
+
+What it does
+    On the ZX Spectrum Next machine (--machine tbblue, NextZXOS/NextBASIC),
+    makes the BASIC commands SAVE / LOAD / MERGE / ERASE with a plain
+    filename (no drive letter, no path, no extension) operate directly on
+    files in a host directory:
+
+        SAVE "lib"   -> writes <hostdir>/lib.bas
+        LOAD "game"  -> reads  <hostdir>/game.bas
+        MERGE "lib"  -> merges <hostdir>/lib.bas
+        SAVE "@"     -> re-saves to the last file opened through the handler
+        ERASE "lib"  -> deletes <hostdir>/lib.bas
+
+    Host .bas files are PLAIN TEXT BASIC LISTINGS - one numbered line per
+    text line, exactly like the output of LIST - so they can be edited and
+    versioned host-side with any editor. SAVE detokenizes the program to
+    text; LOAD tokenizes it back (classic 48K keyword set, including the
+    hidden 0Eh five-byte number forms; BIN literals are encoded as binary).
+    Legacy raw tokenized files (first byte 0) are still accepted on LOAD.
+
+    Non-ASCII ZX characters are preserved in the listings (UTF-8):
+
+        block graphics 80h-8Fh   Unicode quadrant characters (the empty
+                                 block 80h, which has no glyph, is \..)
+        UDGs A-U (90h-A4h)       \a .. \u          (zmakebas convention)
+        pound 60h / (c) 7Fh      UTF-8 pound and copyright signs
+        anything else            \xHH               (lossless fallback)
+
+    LOAD additionally accepts zmakebas-style block escapes (backslash plus
+    two column characters from . ' , : meaning none/top/bottom/both, left
+    column first - e.g. \': is the 8Bh block).
+    The 128-byte PLUS3DOS header never touches the host: it is synthesized
+    on LOAD and stripped on SAVE, and the variables area is stripped too.
+    Saves are atomic (temp file + rename) and filename matching against the
+    host directory is case-insensitive.
+
+    (SAVE "" cannot be used for re-saving: the NextBASIC ROM rejects the
+    empty filename with "Invalid file name" before it ever reaches the
+    +3DOS layer, which is where this patch lives. Hence the "@" alias.)
+
+    Filespecs containing ':', '/', '\', '.' or wildcards are passed through
+    untouched to the real NextZXOS, so the OS still boots and runs from its
+    SD image (tbblue.mmc) - only plain-name BASIC file access is hijacked.
+
+How it works
+    NextBASIC performs all its file access through the +3DOS-compatible API
+    in ROM 2 (DOS_OPEN 0106h, DOS_CLOSE 0109h, DOS_READ 0112h, ...). The
+    patch traps the jump-table entries when the TBBlue runs in +3e mode
+    with the DOS ROM paged at 0000h-3FFFh, and services the calls from the
+    host directory instead.
+
+Activation
+    Inert unless the environment variable ZESARUX_NEXTBASIC_DIR is set:
+
+        ZESARUX_NEXTBASIC_DIR=$HOME/programs \
+        zesarux --machine tbblue --mmc-file tbblue.mmc \
+                --enable-mmc --enable-divmmc-ports
+
+    Optionally, ZESARUX_NEXTBASIC_AUTOLOAD=<name> boots straight into
+    <hostdir>/<name>.bas: the handler serves a synthetic
+    c:/nextzxos/autoexec.bas ("10 LOAD "<name>"") and gives the loaded
+    program an autostart line, so it LOADs and RUNs unattended.
+    ZESARUX_NEXTBASIC_AUTOLOAD=- serves an empty autoexec instead, which
+    suppresses any real autoexec on the SD image and boots to the NextZXOS
+    menu.
+
+    Requires the normal Spectrum core (the default); the reduced core
+    (--spectrum-reduced-core) does not run these traps.
+
+How to apply (against https://github.com/chernandezba/zesarux master)
+    cd zesarux
+    git apply /path/to/zesarux-nextbasic-hostdisk.patch
+
+    Then build as usual, e.g.:
+    cd src && ./configure && make
+
+Verified
+    Against ZEsarUX master 7d33f6b (13.1-SN, July 2026) with the bundled
+    tbblue.mmc (NextZXOS 2.06H): SAVE producing text listings, LOAD/LIST/
+    RUN of text listings, MERGE, ERASE, SAVE "@", autoload boot, and
+    untouched NextZXOS boot/Browser access.
+
+diff --git a/src/cores/core_spectrum.c b/src/cores/core_spectrum.c
+index 9e0d179..59c9fe2 100644
+--- a/src/cores/core_spectrum.c
++++ b/src/cores/core_spectrum.c
+@@ -1063,6 +1063,7 @@ void cpu_core_loop_spectrum(void)
+     if (chardetect_detect_char_enabled.v) chardetect_detect_char();
+     if (chardetect_printchar_enabled.v) chardetect_printchar();
+     if (plus3dos_traps.v) traps_plus3dos();
++    if (nextbasic_hostdisk_traps.v && MACHINE_IS_TBBLUE) traps_nextbasic_hostdisk();
+ 
+ 
+     //Gestionar autoload
+diff --git a/src/storage/plus3dos_handler.c b/src/storage/plus3dos_handler.c
+index da8d4cf..a648083 100644
+--- a/src/storage/plus3dos_handler.c
++++ b/src/storage/plus3dos_handler.c
+@@ -35,6 +35,8 @@ PLUS3DOS handler
+ #include <string.h>
+ 
+ 
++#include <sys/stat.h>
++
+ #include "plus3dos_handler.h"
+ #include "cpu.h"
+ #include "debug.h"
+@@ -42,6 +44,7 @@ PLUS3DOS handler
+ #include "operaciones.h"
+ #include "mem128.h"
+ #include "dsk.h"
++#include "tbblue.h"
+ 
+ 
+ z80_bit plus3dos_traps={0};
+@@ -1180,3 +1183,1051 @@ ENTRY CONDITIONS
+ 
+ 
+ 
++
++
++/*
++
++NextBASIC host-disk handler (TBBlue / ZX Spectrum Next)
++
++Makes NextBASIC SAVE/LOAD/MERGE with a plain filename (no drive letter, no
++path, no extension) operate on raw tokenized BASIC files <dir>/<name>.bas in
++a host directory, instead of the emulated SD card:
++
++    SAVE "lib"   -> writes <dir>/lib.bas
++    LOAD "game"  -> reads  <dir>/game.bas
++    MERGE "lib"  -> merges <dir>/lib.bas
++    SAVE ""      -> re-saves to the last file opened through this handler
++    ERASE "lib"  -> deletes <dir>/lib.bas
++
++Host files are PLAIN TEXT BASIC listings (one numbered line per text line,
++like the output of LIST): SAVE detokenizes the program to text and LOAD
++tokenizes it back, so the files can be edited and versioned host-side with
++any editor. Files that are already raw tokenized BASIC (first byte 0) are
++still accepted on LOAD. The 128-byte PLUS3DOS header never touches the
++host: it is synthesized on LOAD and stripped on SAVE. Saves are written
++atomically (temp file + rename).
++
++It works by trapping the +3DOS API jump table entries (DOS_OPEN 0106h,
++DOS_CLOSE 0109h, DOS_READ 0112h, ...) when the machine is TBBlue in +3e
++mode with the DOS ROM (ROM 2) paged in - the way NextZXOS/NextBASIC
++performs all its file access. Filespecs containing ':', '/', '\', '.' or
++wildcards are left alone and fall through to the real NextZXOS, so the OS
++still boots and runs from its SD image.
++
++Inert unless the environment variable ZESARUX_NEXTBASIC_DIR is set.
++
++*/
++
++//Auto-disables itself on the first call if ZESARUX_NEXTBASIC_DIR is unset
++z80_bit nextbasic_hostdisk_traps={1};
++
++#define NBHD_MAX_FILES 16
++#define NBHD_MAX_NAME 64
++#define NBHD_MAX_PATH 4096
++
++//+3DOS header data (type,length,param1,param2) for file number B is kept in
++//RAM page 7, which NextZXOS maps at C000h-FFFFh while servicing DOS calls.
++//DOS_REF_HEAD returns IX pointing here and the BASIC ROM reads/writes the
++//8 bytes directly
++#define NBHD_HEADER_BASE 0xFF00
++
++struct s_nbhd_file {
++    int inuse;
++    int dirty;
++    z80_byte *buf;
++    int allocated;
++    int size;
++    int pos;
++    char name[NBHD_MAX_NAME];
++};
++
++static struct s_nbhd_file nbhd_files[NBHD_MAX_FILES];
++static char *nbhd_dir=NULL;
++static char nbhd_last_name[NBHD_MAX_NAME]="";
++
++//ZESARUX_NEXTBASIC_AUTOLOAD: boot straight into a program instead of the
++//NextZXOS menu. The handler serves a synthetic c:/nextzxos/autoexec.bas
++//("10 LOAD "<name>"") and gives the loaded program an autostart line, so
++//it LOADs and RUNs with no interaction. When the program ends, NextZXOS
++//shows its menu as usual. Value "-" serves an empty autoexec ("10 REM"),
++//which suppresses any real autoexec on the SD image and boots to the menu
++static char *nbhd_autoload=NULL;
++static int nbhd_autoload_pending=0;
++
++static void nbhd_return_ok(void)
++{
++    Z80_FLAGS |=FLAG_C;
++    reg_pc=pop_valor();
++}
++
++static void nbhd_return_error(z80_byte error_code)
++{
++    reg_a=error_code;
++    Z80_FLAGS=(Z80_FLAGS & (255-FLAG_C));
++    reg_pc=pop_valor();
++}
++
++//Memory access honouring the +3DOS convention: addresses C000h-FFFFh refer
++//to 16K RAM page "page" (which the real DOS would map there), addresses
++//below use the current paging (RAM 5 / RAM 2 in the DOS configuration).
++//A transfer running past FFFFh wraps to C000h of the next page
++static z80_byte nbhd_peek(z80_byte page,z80_int dir)
++{
++    if (dir>=49152) return tbblue_ram_memory_pages[((page&7)<<1)|((dir>>13)&1)][dir&8191];
++    return tbblue_memory_paged[dir>>13][dir&8191];
++}
++
++static void nbhd_poke(z80_byte page,z80_int dir,z80_byte value)
++{
++    if (dir>=49152) {
++        tbblue_ram_memory_pages[((page&7)<<1)|((dir>>13)&1)][dir&8191]=value;
++        return;
++    }
++    if (dir<16384) return; //never write to the ROM area
++    tbblue_memory_paged[dir>>13][dir&8191]=value;
++}
++
++static void nbhd_advance(z80_byte *page,z80_int *dir)
++{
++    if (*dir==65535) {
++        *dir=49152;
++        (*page)++;
++    }
++    else (*dir)++;
++}
++
++static z80_byte nbhd_peek_page7(z80_int dir)
++{
++    return tbblue_ram_memory_pages[14|((dir>>13)&1)][dir&8191];
++}
++
++static void nbhd_poke_page7(z80_int dir,z80_byte value)
++{
++    tbblue_ram_memory_pages[14|((dir>>13)&1)][dir&8191]=value;
++}
++
++static void nbhd_set_header(z80_byte fnum,z80_byte type,int length,int param1,int param2)
++{
++    z80_int base=NBHD_HEADER_BASE+8*fnum;
++    nbhd_poke_page7(base,type);
++    nbhd_poke_page7(base+1,length&0xFF);
++    nbhd_poke_page7(base+2,(length>>8)&0xFF);
++    nbhd_poke_page7(base+3,param1&0xFF);
++    nbhd_poke_page7(base+4,(param1>>8)&0xFF);
++    nbhd_poke_page7(base+5,param2&0xFF);
++    nbhd_poke_page7(base+6,(param2>>8)&0xFF);
++    nbhd_poke_page7(base+7,0);
++}
++
++//Only plain names are handled by this handler. Anything with a path, drive,
++//extension or wildcard falls through to the real NextZXOS
++static int nbhd_valid_name(const char *name)
++{
++    int i;
++    if (name[0]==0) return 0;
++    for (i=0;name[i];i++) {
++        char c=name[i];
++        if (! ( (c>='A' && c<='Z') || (c>='a' && c<='z') || (c>='0' && c<='9')
++             || c=='_' || c=='-' || c==' ' ) ) return 0;
++    }
++    return 1;
++}
++
++static int nbhd_strcaseeq(const char *a,const char *b)
++{
++    while (*a && *b) {
++        char ca=*a, cb=*b;
++        if (ca>='A' && ca<='Z') ca +=32;
++        if (cb>='A' && cb<='Z') cb +=32;
++        if (ca!=cb) return 0;
++        a++;
++        b++;
++    }
++    return (*a==0 && *b==0);
++}
++
++//Build host path for name. Returns non-zero if the file exists; falls back
++//to a case-insensitive directory search (Spectrum users mix cases freely)
++static int nbhd_find_host_file(const char *name,char *path)
++{
++    struct stat st;
++
++    snprintf(path,NBHD_MAX_PATH,"%s/%s.bas",nbhd_dir,name);
++    if (stat(path,&st)==0) return 1;
++
++    DIR *d=opendir(nbhd_dir);
++    if (d!=NULL) {
++        struct dirent *entry;
++        while ((entry=readdir(d))!=NULL) {
++            char base[NBHD_MAX_NAME+8];
++            int l=strlen(entry->d_name);
++            if (l<5 || l>=(int)sizeof(base)) continue;
++            strcpy(base,entry->d_name);
++            if (!nbhd_strcaseeq(&base[l-4],".bas")) continue;
++            base[l-4]=0;
++            if (nbhd_strcaseeq(base,name)) {
++                snprintf(path,NBHD_MAX_PATH,"%s/%s",nbhd_dir,entry->d_name);
++                closedir(d);
++                return 1;
++            }
++        }
++        closedir(d);
++    }
++
++    return 0;
++}
++
++static int nbhd_ensure_capacity(struct s_nbhd_file *f,int needed)
++{
++    if (needed<=f->allocated) return 1;
++    int newalloc=needed+16384;
++    z80_byte *newbuf=realloc(f->buf,newalloc);
++    if (newbuf==NULL) return 0;
++    memset(&newbuf[f->allocated],0,newalloc-f->allocated);
++    f->buf=newbuf;
++    f->allocated=newalloc;
++    return 1;
++}
++
++static void nbhd_free_file(struct s_nbhd_file *f)
++{
++    if (f->buf!=NULL) free(f->buf);
++    memset(f,0,sizeof(*f));
++}
++
++//Reads a 0FFh-terminated +3DOS filespec from emulated memory
++static void nbhd_read_filespec(z80_int dir,char *name)
++{
++    int i;
++    for (i=0;i<NBHD_MAX_NAME-1;i++) {
++        z80_byte c=peek_byte_no_time(dir+i);
++        if (c==0xFF || c==0 || c==0x0D) break;
++        name[i]=c;
++    }
++    name[i]=0;
++    while (i>0 && name[i-1]==' ') name[--i]=0;
++}
++
++/*
++Text listing <-> tokenized BASIC conversion. The host files are plain text;
++the machine wants the classic Sinclair tokenized form (48K token set, which
++is what NextBASIC uses for these keywords), with every number literal
++followed by its hidden 0Eh + 5 byte binary form.
++*/
++
++//Tokens A5h..FFh
++static const char *nbhd_token_names[]={
++    "RND","INKEY$","PI","FN","POINT","SCREEN$","ATTR","AT","TAB","VAL$",
++    "CODE","VAL","LEN","SIN","COS","TAN","ASN","ACS","ATN","LN","EXP",
++    "INT","SQR","SGN","ABS","PEEK","IN","USR","STR$","CHR$","NOT","BIN",
++    "OR","AND","<=",">=","<>","LINE","THEN","TO","STEP","DEF FN","CAT",
++    "FORMAT","MOVE","ERASE","OPEN #","CLOSE #","MERGE","VERIFY","BEEP",
++    "CIRCLE","INK","PAPER","FLASH","BRIGHT","INVERSE","OVER","OUT",
++    "LPRINT","LLIST","STOP","READ","DATA","RESTORE","NEW","BORDER",
++    "CONTINUE","DIM","REM","FOR","GO TO","GO SUB","INPUT","LOAD","LIST",
++    "LET","PAUSE","NEXT","POKE","PRINT","PLOT","RUN","SAVE","RANDOMIZE",
++    "IF","CLS","DRAW","CLEAR","RETURN","COPY"
++};
++#define NBHD_TOKEN_BASE 0xA5
++#define NBHD_NUM_TOKENS 91
++#define NBHD_TOKEN_REM 0xEA
++#define NBHD_TOKEN_BIN 0xC4
++
++static int nbhd_is_word_char(char c)
++{
++    return ( (c>='A' && c<='Z') || (c>='a' && c<='z') || (c>='0' && c<='9') || c=='$' );
++}
++
++/*
++Host-side representation of the non-ASCII ZX characters, so listings keep
++block graphics and UDGs:
++
++    80h-8Fh  block graphics   Unicode quadrant characters (the empty block
++                              80h, which has no glyph, is written \..)
++    90h-A4h  UDGs A-U         \a .. \u        (zmakebas convention)
++    60h,7Fh  pound, copyright UTF-8 £ and ©
++    5Ch      backslash        \\
++    others   (colour codes..) \xHH
++
++LOAD additionally accepts zmakebas-style block escapes: backslash plus two
++column characters from . ' , :  (none/top/bottom/both), left column first,
++e.g. \': is the 8Bh block. All of this applies inside strings and REM text.
++*/
++
++//UTF-8 quadrant characters indexed by low nibble of the ZX code
++//(bit 0 = top right, bit 1 = top left, bit 2 = bottom right, bit 3 = bottom left)
++static const char *nbhd_block_utf8[16]={
++    NULL,          //80h: empty block, no Unicode glyph -> \..
++    "\xE2\x96\x9D","\xE2\x96\x98","\xE2\x96\x80","\xE2\x96\x97",
++    "\xE2\x96\x90","\xE2\x96\x9A","\xE2\x96\x9C","\xE2\x96\x96",
++    "\xE2\x96\x9E","\xE2\x96\x8C","\xE2\x96\x9B","\xE2\x96\x84",
++    "\xE2\x96\x9F","\xE2\x96\x99","\xE2\x96\x88"
++};
++
++//Appends the host text representation of ZX character b. Returns new length
++static int nbhd_emit_zx_char(char *text,int len,z80_byte b)
++{
++    if (b==0x60) { text[len++]=(char)0xC2; text[len++]=(char)0xA3; return len; } //£
++    if (b==0x7F) { text[len++]=(char)0xC2; text[len++]=(char)0xA9; return len; } //©
++    if (b=='\\') { text[len++]='\\'; text[len++]='\\'; return len; }
++    if (b==0x80) { memcpy(&text[len],"\\..",3); return len+3; }
++    if (b>=0x81 && b<=0x8F) {
++        memcpy(&text[len],nbhd_block_utf8[b-0x80],3);
++        return len+3;
++    }
++    if (b>=0x90 && b<=0xA4) { text[len++]='\\'; text[len++]='a'+(b-0x90); return len; }
++    if (b>=32 && b<127) { text[len++]=(char)b; return len; }
++    sprintf(&text[len],"\\x%02X",b);
++    return len+4;
++}
++
++static int nbhd_hex_digit(char c)
++{
++    if (c>='0' && c<='9') return c-'0';
++    if (c>='A' && c<='F') return c-'A'+10;
++    if (c>='a' && c<='f') return c-'a'+10;
++    return -1;
++}
++
++//Column of a zmakebas block escape: . none, ' top, , bottom, : both.
++//Returns -1 if the character is not a column character
++static int nbhd_block_column(char c)
++{
++    if (c=='.') return 0;
++    if (c=='\'') return 1;
++    if (c==',') return 2;
++    if (c==':') return 3;
++    return -1;
++}
++
++//Decodes a host text representation at text[i] back into ZX character *out.
++//Returns the number of text characters consumed, 0 if nothing special here
++static int nbhd_decode_zx_char(const char *text,int i,z80_byte *out)
++{
++    unsigned char c=text[i];
++
++    if (c==0xC2) {
++        unsigned char d=text[i+1];
++        if (d==0xA3) { *out=0x60; return 2; } //£
++        if (d==0xA9) { *out=0x7F; return 2; } //©
++    }
++
++    if (c==0xE2 && (unsigned char)text[i+1]==0x96) {
++        unsigned char d=text[i+2];
++        int k;
++        for (k=1;k<16;k++) {
++            if ((unsigned char)nbhd_block_utf8[k][2]==d) { *out=0x80+k; return 3; }
++        }
++    }
++
++    if (c=='\\') {
++        char d=text[i+1];
++        if (d=='\\') { *out='\\'; return 2; }
++        if (d>='a' && d<='u') { *out=0x90+(d-'a'); return 2; }
++        if (d>='A' && d<='U' && d!='X') { *out=0x90+(d-'A'); return 2; }
++        if (d=='x' || d=='X') {
++            int h=nbhd_hex_digit(text[i+2]);
++            int l=(h>=0 ? nbhd_hex_digit(text[i+3]) : -1);
++            if (l>=0) { *out=(h<<4)|l; return 4; }
++        }
++        int left=nbhd_block_column(d);
++        int right=(left>=0 ? nbhd_block_column(text[i+2]) : -1);
++        if (right>=0) {
++            *out=0x80 | ((left&1)<<1) | ((left&2)<<2)      //top left 2, bottom left 8
++                      | (right&1) | ((right&2)<<1);        //top right 1, bottom right 4
++            return 3;
++        }
++    }
++
++    return 0;
++}
++
++//5-byte ZX Spectrum representation of a (non-negative) number
++static void nbhd_zx_number(double value,z80_byte *out)
++{
++    if (value==(double)(unsigned int)value && value<=65535.0) {
++        unsigned int n=(unsigned int)value;
++        out[0]=0; out[1]=0; out[2]=n&0xFF; out[3]=(n>>8)&0xFF; out[4]=0;
++        return;
++    }
++    //full float: value = m * 2^e with 0.5 <= m < 1
++    double m=value;
++    int e=0;
++    while (m>=1.0) { m /=2.0; e++; }
++    while (m<0.5)  { m *=2.0; e--; }
++    double scaled=m*4294967296.0+0.5;
++    unsigned long mantissa=(unsigned long)scaled;
++    if (mantissa>=4294967296UL) { mantissa >>=1; e++; }
++    out[0]=(e+128)&0xFF;
++    out[1]=((mantissa>>24)&0x7F); //top bit 0 = positive
++    out[2]=(mantissa>>16)&0xFF;
++    out[3]=(mantissa>>8)&0xFF;
++    out[4]=mantissa&0xFF;
++}
++
++//Tokenizes the text of one BASIC line (without the line number) into out.
++//Returns the number of bytes written (excluding the final 0Dh), or -1 if
++//the result would not fit
++static int nbhd_tokenize_line(const char *text,z80_byte *out,int outmax)
++{
++    int len=0;
++    int i=0;
++    int after_bin=0;
++
++    while (text[i]) {
++        char c=text[i];
++
++        if (len>=outmax-8) return -1;
++
++        if (c=='"') {
++            out[len++]=c;
++            i++;
++            while (text[i]) {
++                if (len>=outmax-8) return -1;
++                if (text[i]=='"') { out[len++]='"'; i++; break; }
++                z80_byte zxc;
++                int consumed=nbhd_decode_zx_char(text,i,&zxc);
++                if (consumed) { out[len++]=zxc; i +=consumed; }
++                else { out[len++]=text[i]; i++; }
++            }
++            continue;
++        }
++
++        //block graphics, UDG escapes etc. are valid anywhere
++        if (c=='\\' || (unsigned char)c>=0x80) {
++            z80_byte zxc;
++            int consumed=nbhd_decode_zx_char(text,i,&zxc);
++            if (consumed) { out[len++]=zxc; i +=consumed; continue; }
++        }
++
++        if ( (c>='0' && c<='9') || (c=='.' && text[i+1]>='0' && text[i+1]<='9') ) {
++            int j=i;
++            while ( (text[j]>='0' && text[j]<='9') || text[j]=='.' ) j++;
++            if ( (text[j]=='e' || text[j]=='E') &&
++                 ( (text[j+1]>='0' && text[j+1]<='9') || text[j+1]=='+' || text[j+1]=='-' ) ) {
++                j +=2;
++                while (text[j]>='0' && text[j]<='9') j++;
++            }
++            if (len+(j-i)+6>=outmax-2) return -1;
++            char literal[64];
++            int litlen=j-i;
++            if (litlen>=(int)sizeof(literal)) return -1;
++            memcpy(literal,&text[i],litlen);
++            literal[litlen]=0;
++            memcpy(&out[len],literal,litlen);
++            len +=litlen;
++            out[len++]=0x0E;
++            double value=(after_bin ? (double)strtol(literal,NULL,2) : strtod(literal,NULL));
++            nbhd_zx_number(value,&out[len]);
++            len +=5;
++            after_bin=0;
++            i=j;
++            continue;
++        }
++
++        //keyword, only at a word boundary
++        int matched=-1;
++        int matched_len=0;
++        if (i==0 || !nbhd_is_word_char(text[i-1])) {
++            int t;
++            for (t=0;t<NBHD_NUM_TOKENS+3;t++) {
++                //three extra spellings: GOTO, GOSUB, DEFFN
++                const char *kw;
++                z80_byte code;
++                if (t<NBHD_NUM_TOKENS) { kw=nbhd_token_names[t]; code=NBHD_TOKEN_BASE+t; }
++                else if (t==NBHD_NUM_TOKENS)   { kw="GOTO";  code=0xEC; }
++                else if (t==NBHD_NUM_TOKENS+1) { kw="GOSUB"; code=0xED; }
++                else                           { kw="DEFFN"; code=0xCE; }
++                int kl=strlen(kw);
++                if (kl<=matched_len) continue;
++                if (strncmp(&text[i],kw,kl)) continue;
++                char last=kw[kl-1];
++                char next=text[i+kl];
++                if (nbhd_is_word_char(last) && next && nbhd_is_word_char(next)) continue;
++                matched=code;
++                matched_len=kl;
++            }
++        }
++
++        if (matched>=0) {
++            out[len++]=matched;
++            i +=matched_len;
++            if (text[i]==' ') i++; //LIST re-creates this space
++            if (matched==NBHD_TOKEN_REM) {
++                while (text[i]) {
++                    if (len>=outmax-2) return -1;
++                    z80_byte zxc;
++                    int consumed=nbhd_decode_zx_char(text,i,&zxc);
++                    if (consumed) { out[len++]=zxc; i +=consumed; }
++                    else { out[len++]=text[i]; i++; }
++                }
++            }
++            if (matched==NBHD_TOKEN_BIN) after_bin=1;
++            continue;
++        }
++
++        if (c==' ') { i++; continue; } //spacing is re-created by LIST
++
++        out[len++]=c;
++        i++;
++    }
++
++    return len;
++}
++
++//Parses a whole text listing into the file buffer (tokenized program).
++//Returns 0 on failure
++static int nbhd_tokenize_text(struct s_nbhd_file *f,const char *text,int textlen)
++{
++    int pos=0;
++    f->size=0;
++
++    while (pos<textlen) {
++        //one text line
++        char line[1024];
++        int ll=0;
++        while (pos<textlen && text[pos]!='\n') {
++            char c=text[pos++];
++            if (c!='\r' && ll<(int)sizeof(line)-1) line[ll++]=c;
++        }
++        if (pos<textlen) pos++; //skip the newline
++        line[ll]=0;
++
++        //line number
++        int i=0;
++        while (line[i]==' ') i++;
++        if (!(line[i]>='0' && line[i]<='9')) continue; //skip blank/malformed lines
++        int number=0;
++        while (line[i]>='0' && line[i]<='9') number=number*10+(line[i++]-'0');
++        if (number>9999) continue;
++        while (line[i]==' ') i++;
++
++        z80_byte content[1024];
++        int clen=nbhd_tokenize_line(&line[i],content,sizeof(content));
++        if (clen<0) return 0;
++
++        if (!nbhd_ensure_capacity(f,f->size+4+clen+1)) return 0;
++        f->buf[f->size++]=(number>>8)&0xFF; //line number, big endian
++        f->buf[f->size++]=number&0xFF;
++        f->buf[f->size++]=(clen+1)&0xFF;    //line length, little endian
++        f->buf[f->size++]=((clen+1)>>8)&0xFF;
++        memcpy(&f->buf[f->size],content,clen);
++        f->size +=clen;
++        f->buf[f->size++]=0x0D;
++    }
++
++    return 1;
++}
++
++//Renders size bytes of tokenized program as a text listing. Returns a
++//malloc'd string and stores its length in *out_len
++static char *nbhd_detokenize(const z80_byte *body,int size,int *out_len)
++{
++    //every program byte expands to at most 12 text characters (longest
++    //keyword plus surrounding spaces), plus a little per-line overhead
++    int cap=size*14+256;
++    char *text=malloc(cap);
++    if (text==NULL) return NULL;
++    int len=0;
++
++    int pos=0;
++    while (pos+4<=size) {
++        int number=(body[pos]<<8)|body[pos+1];
++        int llen=body[pos+2]|(body[pos+3]<<8);
++        int end=pos+4+llen;
++        if (end>size) end=size;
++        pos +=4;
++
++        len +=sprintf(&text[len],"%d ",number);
++
++        int in_string=0;
++        int in_rem=0;
++        while (pos<end) {
++            z80_byte b=body[pos];
++            if (b==0x0D) { pos++; break; }
++            if (!in_string && !in_rem && b==0x0E) { pos +=6; continue; } //hidden number form
++            if (!in_rem && b=='"') in_string=!in_string;
++            if (!in_string && !in_rem && b>=NBHD_TOKEN_BASE) {
++                const char *kw=nbhd_token_names[b-NBHD_TOKEN_BASE];
++                if (len && text[len-1]!=' ') text[len++]=' ';
++                len +=sprintf(&text[len],"%s ",kw);
++                if (b==NBHD_TOKEN_REM) in_rem=1; //rest of the line is plain text
++            }
++            else {
++                len=nbhd_emit_zx_char(text,len,b);
++            }
++            pos++;
++        }
++
++        while (len && text[len-1]==' ') len--; //no trailing spaces
++        text[len++]='\n';
++
++        if (len>cap-32) break; //can not happen with the cap above, but be safe
++    }
++
++    text[len]=0;
++    *out_len=len;
++    return text;
++}
++
++//Serves a synthetic autoexec.bas: "10 LOAD "<name>"" (or "10 REM" for "-")
++static void nbhd_serve_autoexec(z80_byte fnum)
++{
++    struct s_nbhd_file *f=&nbhd_files[fnum];
++    nbhd_free_file(f);
++
++    z80_byte body[NBHD_MAX_NAME+16];
++    int len=0;
++
++    body[len++]=0x00; body[len++]=0x0A; //line 10, big endian
++    len +=2; //line length filled below
++    if (!strcmp(nbhd_autoload,"-")) {
++        body[len++]=0xEA; //REM
++    }
++    else {
++        body[len++]=0xEF; //LOAD
++        body[len++]='"';
++        int i;
++        for (i=0;nbhd_autoload[i] && i<NBHD_MAX_NAME-1;i++) body[len++]=nbhd_autoload[i];
++        body[len++]='"';
++        nbhd_autoload_pending=1; //give the next plain-name LOAD an autostart line
++    }
++    body[len++]=0x0D;
++    body[2]=(len-4)&0xFF; body[3]=((len-4)>>8)&0xFF;
++
++    if (!nbhd_ensure_capacity(f,len)) return;
++    memcpy(f->buf,body,len);
++    f->inuse=1;
++    f->size=len;
++    strcpy(f->name,"");
++    nbhd_set_header(fnum,0,len,10,len); //autostart at line 10
++    debug_printf(VERBOSE_INFO,"NextBASIC host disk: serving synthetic autoexec (autoload '%s')",nbhd_autoload);
++    Z80_FLAGS=(Z80_FLAGS & (255-FLAG_Z));
++    nbhd_return_ok();
++}
++
++static void nbhd_dos_open(void)
++{
++    char name[NBHD_MAX_NAME];
++    char path[NBHD_MAX_PATH];
++    z80_byte fnum=reg_b;
++
++    if (fnum>=NBHD_MAX_FILES) return;
++
++    nbhd_read_filespec(reg_hl,name);
++
++    debug_printf(VERBOSE_INFO,"NextBASIC host disk: DOS_OPEN B=%d C=%d D=%d E=%d name='%s'",reg_b,reg_c,reg_d,reg_e,name);
++
++    if (nbhd_autoload!=NULL) {
++        int l=strlen(name);
++        if (l>=12 && nbhd_strcaseeq(&name[l-12],"autoexec.bas")) {
++            nbhd_serve_autoexec(fnum);
++            return;
++        }
++    }
++
++    //access modes 2 (exclusive-write) and 3 (exclusive-read-write) mean SAVE
++    int write_mode=((reg_c&7)==2 || (reg_c&7)==3);
++
++    //SAVE "@" / LOAD "@" -> the last file opened through this handler.
++    //(The NextBASIC ROM rejects SAVE "" with "Invalid file name" before it
++    //ever reaches +3DOS, so an empty name can not be used for this)
++    if (!strcmp(name,"@") && nbhd_last_name[0]) strcpy(name,nbhd_last_name);
++
++    if (!nbhd_valid_name(name)) return;
++
++    struct s_nbhd_file *f=&nbhd_files[fnum];
++    nbhd_free_file(f);
++
++    if (write_mode) {
++        debug_printf(VERBOSE_INFO,"NextBASIC host disk: open for write: %s",name);
++        f->inuse=1;
++        strcpy(f->name,name);
++        strcpy(nbhd_last_name,name);
++        nbhd_set_header(fnum,0,0,0x8000,0);
++        Z80_FLAGS |=FLAG_Z; //newly created
++        nbhd_return_ok();
++        return;
++    }
++
++    //LOAD / MERGE
++    if (!nbhd_find_host_file(name,path)) {
++        debug_printf(VERBOSE_INFO,"NextBASIC host disk: not found: %s",name);
++        nbhd_return_error(23); //File not found
++        return;
++    }
++
++    FILE *host=fopen(path,"rb");
++    if (host==NULL) {
++        nbhd_return_error(23);
++        return;
++    }
++
++    fseek(host,0,SEEK_END);
++    int rawsize=ftell(host);
++    fseek(host,0,SEEK_SET);
++    if (rawsize<0) rawsize=0;
++    if (rawsize>0x40000) rawsize=0x40000;
++
++    char *raw=malloc(rawsize+1);
++    if (raw==NULL || (rawsize>0 && fread(raw,1,rawsize,host)!=(size_t)rawsize)) {
++        if (raw!=NULL) free(raw);
++        fclose(host);
++        nbhd_return_error(23);
++        return;
++    }
++    fclose(host);
++    raw[rawsize]=0;
++
++    int ok;
++    if (rawsize>0 && raw[0]==0) {
++        //legacy raw tokenized file: use as-is
++        if (rawsize>0xFFFF) rawsize=0xFFFF;
++        ok=nbhd_ensure_capacity(f,rawsize);
++        if (ok) {
++            memcpy(f->buf,raw,rawsize);
++            f->size=rawsize;
++        }
++    }
++    else {
++        //plain text listing: tokenize
++        ok=nbhd_tokenize_text(f,raw,rawsize);
++    }
++    free(raw);
++
++    if (!ok || f->size>0xFFFF) {
++        nbhd_free_file(f);
++        nbhd_return_error(23);
++        return;
++    }
++
++    int size=f->size;
++    debug_printf(VERBOSE_INFO,"NextBASIC host disk: open for read: %s (%d bytes tokenized)",path,size);
++
++    f->inuse=1;
++    strcpy(f->name,name);
++    strcpy(nbhd_last_name,name);
++
++    //synthesize +3DOS header: BASIC program, no autostart, no variables area.
++    //If this load was requested by the synthetic autoexec, set the autostart
++    //line to the program's first line so it RUNs by itself
++    int param1=0x8000;
++    if (nbhd_autoload_pending && size>=2) {
++        param1=(f->buf[0]<<8)|f->buf[1];
++        nbhd_autoload_pending=0;
++    }
++    nbhd_set_header(fnum,0,size,param1,size);
++
++    Z80_FLAGS=(Z80_FLAGS & (255-FLAG_Z)); //existing file opened
++    nbhd_return_ok();
++}
++
++static struct s_nbhd_file *nbhd_get_open_file(void)
++{
++    if (reg_b>=NBHD_MAX_FILES) return NULL;
++    if (!nbhd_files[reg_b].inuse) return NULL;
++    return &nbhd_files[reg_b];
++}
++
++static void nbhd_dos_close(void)
++{
++    struct s_nbhd_file *f=nbhd_get_open_file();
++    if (f==NULL) return;
++
++    if (f->dirty) {
++        z80_int base=NBHD_HEADER_BASE+8*reg_b;
++        z80_byte type=nbhd_peek_page7(base);
++        int param2=nbhd_peek_page7(base+5) | (nbhd_peek_page7(base+6)<<8);
++
++        //For a BASIC program (type 0) param2 is the length of the program
++        //without variables: truncate there so the host .bas file stays a
++        //clean tokenized listing
++        int save_size=f->size;
++        if (type==0 && param2>0 && param2<=f->size) save_size=param2;
++
++        char path[NBHD_MAX_PATH];
++        char tmppath[NBHD_MAX_PATH];
++        snprintf(path,NBHD_MAX_PATH,"%s/%s.bas",nbhd_dir,f->name);
++        snprintf(tmppath,NBHD_MAX_PATH,"%s/.%s.bas.tmp",nbhd_dir,f->name);
++
++        //overwrite an existing file even if it differs in case
++        nbhd_find_host_file(f->name,path);
++
++        //A BASIC program is stored host-side as a plain text listing;
++        //anything else (CODE blocks...) is stored as raw bytes
++        char *text=NULL;
++        int text_len=0;
++        if (type==0) {
++            text=nbhd_detokenize(f->buf,save_size,&text_len);
++            if (text==NULL) {
++                nbhd_free_file(f);
++                nbhd_return_error(26); //Disk full
++                return;
++            }
++        }
++
++        FILE *host=fopen(tmppath,"wb");
++        if (host==NULL) {
++            if (text!=NULL) free(text);
++            nbhd_free_file(f);
++            nbhd_return_error(26); //Disk full
++            return;
++        }
++
++        int ok;
++        if (text!=NULL) ok=((int)fwrite(text,1,text_len,host)==text_len);
++        else ok=((int)fwrite(f->buf,1,save_size,host)==save_size);
++        if (fclose(host)!=0) ok=0;
++        if (ok && rename(tmppath,path)!=0) ok=0;
++        if (text!=NULL) free(text);
++
++        debug_printf(VERBOSE_INFO,"NextBASIC host disk: %s %s (%d bytes)",
++            ok ? "saved" : "FAILED saving",path,save_size);
++
++        if (!ok) {
++            nbhd_free_file(f);
++            nbhd_return_error(26);
++            return;
++        }
++    }
++
++    nbhd_free_file(f);
++    nbhd_return_ok();
++}
++
++static void nbhd_dos_abandon(void)
++{
++    struct s_nbhd_file *f=nbhd_get_open_file();
++    if (f==NULL) return;
++
++    nbhd_free_file(f);
++    nbhd_return_ok();
++}
++
++static void nbhd_dos_ref_head(void)
++{
++    struct s_nbhd_file *f=nbhd_get_open_file();
++    if (f==NULL) return;
++
++    reg_ix=NBHD_HEADER_BASE+8*reg_b;
++    Z80_FLAGS=(Z80_FLAGS & (255-FLAG_Z)); //file has a header
++    nbhd_return_ok();
++}
++
++static void nbhd_dos_read(void)
++{
++    struct s_nbhd_file *f=nbhd_get_open_file();
++    if (f==NULL) return;
++
++    int count=(reg_de==0 ? 65536 : reg_de);
++    int available=f->size - f->pos;
++    int tocopy=(count<available ? count : available);
++
++    z80_byte page=reg_c;
++    z80_int dir=reg_hl;
++    int i;
++    for (i=0;i<tocopy;i++) {
++        nbhd_poke(page,dir,f->buf[f->pos+i]);
++        nbhd_advance(&page,&dir);
++    }
++    f->pos +=tocopy;
++
++    if (tocopy<count) {
++        reg_de=count-tocopy;
++        nbhd_return_error(25); //End of file
++    }
++    else nbhd_return_ok();
++}
++
++static void nbhd_dos_write(void)
++{
++    struct s_nbhd_file *f=nbhd_get_open_file();
++    if (f==NULL) return;
++
++    int count=(reg_de==0 ? 65536 : reg_de);
++
++    if (!nbhd_ensure_capacity(f,f->pos+count)) {
++        nbhd_return_error(26); //Disk full
++        return;
++    }
++
++    z80_byte page=reg_c;
++    z80_int dir=reg_hl;
++    int i;
++    for (i=0;i<count;i++) {
++        f->buf[f->pos+i]=nbhd_peek(page,dir);
++        nbhd_advance(&page,&dir);
++    }
++    f->pos +=count;
++    if (f->pos>f->size) f->size=f->pos;
++    f->dirty=1;
++
++    nbhd_return_ok();
++}
++
++static void nbhd_dos_byte_read(void)
++{
++    struct s_nbhd_file *f=nbhd_get_open_file();
++    if (f==NULL) return;
++
++    if (f->pos>=f->size) {
++        nbhd_return_error(25); //End of file
++        return;
++    }
++
++    reg_c=f->buf[f->pos++];
++    Z80_FLAGS=(Z80_FLAGS & (255-FLAG_Z)); //not soft-EOF
++    nbhd_return_ok();
++}
++
++static void nbhd_dos_byte_write(void)
++{
++    struct s_nbhd_file *f=nbhd_get_open_file();
++    if (f==NULL) return;
++
++    if (!nbhd_ensure_capacity(f,f->pos+1)) {
++        nbhd_return_error(26);
++        return;
++    }
++
++    f->buf[f->pos++]=reg_c;
++    if (f->pos>f->size) f->size=f->pos;
++    f->dirty=1;
++
++    nbhd_return_ok();
++}
++
++static void nbhd_dos_get_position(void)
++{
++    struct s_nbhd_file *f=nbhd_get_open_file();
++    if (f==NULL) return;
++
++    reg_de=(f->pos>>16)&0xFFFF;
++    reg_hl=f->pos&0xFFFF;
++    nbhd_return_ok();
++}
++
++static void nbhd_dos_set_position(void)
++{
++    struct s_nbhd_file *f=nbhd_get_open_file();
++    if (f==NULL) return;
++
++    int pos=(reg_de<<16)|reg_hl;
++    if (pos>f->size) pos=f->size;
++    f->pos=pos;
++    nbhd_return_ok();
++}
++
++static void nbhd_dos_get_eof(void)
++{
++    struct s_nbhd_file *f=nbhd_get_open_file();
++    if (f==NULL) return;
++
++    reg_de=(f->size>>16)&0xFFFF;
++    reg_hl=f->size&0xFFFF;
++    nbhd_return_ok();
++}
++
++static void nbhd_dos_delete(void)
++{
++    char name[NBHD_MAX_NAME];
++    char path[NBHD_MAX_PATH];
++
++    nbhd_read_filespec(reg_hl,name);
++    if (!nbhd_valid_name(name)) return;
++
++    if (!nbhd_find_host_file(name,path)) {
++        nbhd_return_error(23); //File not found
++        return;
++    }
++
++    debug_printf(VERBOSE_INFO,"NextBASIC host disk: delete %s",path);
++
++    if (remove(path)==0) nbhd_return_ok();
++    else nbhd_return_error(28); //File is read only
++}
++
++void traps_nextbasic_hostdisk(void)
++{
++
++    if (nbhd_dir==NULL) {
++        //One-time initialization: without ZESARUX_NEXTBASIC_DIR the handler
++        //switches itself off and never runs again
++        char *e=getenv("ZESARUX_NEXTBASIC_DIR");
++        if (e==NULL || e[0]==0) {
++            nextbasic_hostdisk_traps.v=0;
++            return;
++        }
++        nbhd_dir=strdup(e);
++        e=getenv("ZESARUX_NEXTBASIC_AUTOLOAD");
++        if (e!=NULL && e[0]!=0) nbhd_autoload=strdup(e);
++        debug_printf(VERBOSE_INFO,"NextBASIC host disk enabled on directory %s",nbhd_dir);
++    }
++
++    //+3DOS API jump table entries live at 0106h-0139h, every 3 bytes
++    if (reg_pc<0x0106 || reg_pc>0x0139) return;
++    if ((reg_pc-0x0106)%3) return;
++
++    //Only when the TBBlue runs in +3e mode (NextZXOS)...
++    if ((tbblue_registers[3]&7)!=3) return;
++
++    //...with normal paging and the DOS ROM (ROM 2) at 0000h-3FFFh
++    if (puerto_8189&1) return; //special RAM-in-ROM paging
++    if ((tbblue_registers[0x8c]&192)==128) return; //AltROM active on read
++
++    z80_byte rom_page=((puerto_8189>>1)&2) | ((puerto_32765>>4)&1);
++    if (rom_page!=2) return;
++
++    switch (reg_pc) {
++
++        case 0x0106: //DOS_OPEN
++            nbhd_dos_open();
++        break;
++
++        case 0x0109: //DOS_CLOSE
++            nbhd_dos_close();
++        break;
++
++        case 0x010C: //DOS_ABANDON
++            nbhd_dos_abandon();
++        break;
++
++        case 0x010F: //DOS_REF_HEAD
++            nbhd_dos_ref_head();
++        break;
++
++        case 0x0112: //DOS_READ
++            nbhd_dos_read();
++        break;
++
++        case 0x0115: //DOS_WRITE
++            nbhd_dos_write();
++        break;
++
++        case 0x0118: //DOS_BYTE_READ
++            nbhd_dos_byte_read();
++        break;
++
++        case 0x011B: //DOS_BYTE_WRITE
++            nbhd_dos_byte_write();
++        break;
++
++        case 0x0124: //DOS_DELETE
++            nbhd_dos_delete();
++        break;
++
++        case 0x0133: //DOS_GET_POSITION
++            nbhd_dos_get_position();
++        break;
++
++        case 0x0136: //DOS_SET_POSITION
++            nbhd_dos_set_position();
++        break;
++
++        case 0x0139: //DOS_GET_EOF
++            nbhd_dos_get_eof();
++        break;
++
++    }
++
++}
+diff --git a/src/storage/plus3dos_handler.h b/src/storage/plus3dos_handler.h
+index 6637035..476b6a2 100644
+--- a/src/storage/plus3dos_handler.h
++++ b/src/storage/plus3dos_handler.h
+@@ -28,4 +28,8 @@ extern void traps_plus3dos(void);
+ 
+ extern z80_bit plus3dos_traps;
+ 
++extern void traps_nextbasic_hostdisk(void);
++
++extern z80_bit nextbasic_hostdisk_traps;
++
+ #endif
