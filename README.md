@@ -78,8 +78,22 @@ so no extra downloads are needed.
 - `NEW` returns to the NextZXOS main menu (pick *NextBASIC* to continue).
 - When an auto-loaded program ends, NextZXOS shows its menu.
 - `SAVE "name" LINE 10` autostart lines are not stored in the host file.
-- Exotic characters in strings (UDGs, block graphics) are saved as `?` in
-  the text listing.
+
+### Special characters in listings
+
+Block graphics and the other non-ASCII ZX characters survive the text
+round trip:
+
+| ZX character            | In the listing                                    |
+|-------------------------|---------------------------------------------------|
+| block graphics (128–143)| Unicode quadrant characters `▘▝▀▖▌▞▛▗▚▐▜▄▙▟█` (the empty block 128 is `\..`) |
+| UDGs A–U (144–164)      | `\a` … `\u` (zmakebas convention)                 |
+| `£`, `©`                | UTF-8 `£`, `©`                                    |
+| anything else           | `\xHH` (lossless fallback, e.g. colour codes)     |
+
+`LOAD` also accepts zmakebas-style block escapes (`\` plus two column
+characters from `. ' , :` meaning none/top/bottom/both, left column
+first — `\':` is the ▛ block), so listings written for zmakebas work too.
 
 ## Testing on WSL2 (Windows 11) with Nix flakes
 

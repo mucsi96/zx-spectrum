@@ -19,6 +19,18 @@ What it does
     text; LOAD tokenizes it back (classic 48K keyword set, including the
     hidden 0Eh five-byte number forms; BIN literals are encoded as binary).
     Legacy raw tokenized files (first byte 0) are still accepted on LOAD.
+
+    Non-ASCII ZX characters are preserved in the listings (UTF-8):
+
+        block graphics 80h-8Fh   Unicode quadrant characters (the empty
+                                 block 80h, which has no glyph, is \..)
+        UDGs A-U (90h-A4h)       \a .. \u          (zmakebas convention)
+        pound 60h / (c) 7Fh      UTF-8 pound and copyright signs
+        anything else            \xHH               (lossless fallback)
+
+    LOAD additionally accepts zmakebas-style block escapes (backslash plus
+    two column characters from . ' , : meaning none/top/bottom/both, left
+    column first - e.g. \': is the 8Bh block).
     The 128-byte PLUS3DOS header never touches the host: it is synthesized
     on LOAD and stripped on SAVE, and the variables area is stripped too.
     Saves are atomic (temp file + rename) and filename matching against the
@@ -83,7 +95,7 @@ index 9e0d179..59c9fe2 100644
  
      //Gestionar autoload
 diff --git a/src/storage/plus3dos_handler.c b/src/storage/plus3dos_handler.c
-index da8d4cf..06067ff 100644
+index da8d4cf..a648083 100644
 --- a/src/storage/plus3dos_handler.c
 +++ b/src/storage/plus3dos_handler.c
 @@ -35,6 +35,8 @@ PLUS3DOS handler
@@ -103,7 +115,7 @@ index da8d4cf..06067ff 100644
  
  
  z80_bit plus3dos_traps={0};
-@@ -1180,3 +1183,931 @@ ENTRY CONDITIONS
+@@ -1180,3 +1183,1051 @@ ENTRY CONDITIONS
  
  
  
@@ -362,6 +374,110 @@ index da8d4cf..06067ff 100644
 +    return ( (c>='A' && c<='Z') || (c>='a' && c<='z') || (c>='0' && c<='9') || c=='$' );
 +}
 +
++/*
++Host-side representation of the non-ASCII ZX characters, so listings keep
++block graphics and UDGs:
++
++    80h-8Fh  block graphics   Unicode quadrant characters (the empty block
++                              80h, which has no glyph, is written \..)
++    90h-A4h  UDGs A-U         \a .. \u        (zmakebas convention)
++    60h,7Fh  pound, copyright UTF-8 £ and ©
++    5Ch      backslash        \\
++    others   (colour codes..) \xHH
++
++LOAD additionally accepts zmakebas-style block escapes: backslash plus two
++column characters from . ' , :  (none/top/bottom/both), left column first,
++e.g. \': is the 8Bh block. All of this applies inside strings and REM text.
++*/
++
++//UTF-8 quadrant characters indexed by low nibble of the ZX code
++//(bit 0 = top right, bit 1 = top left, bit 2 = bottom right, bit 3 = bottom left)
++static const char *nbhd_block_utf8[16]={
++    NULL,          //80h: empty block, no Unicode glyph -> \..
++    "\xE2\x96\x9D","\xE2\x96\x98","\xE2\x96\x80","\xE2\x96\x97",
++    "\xE2\x96\x90","\xE2\x96\x9A","\xE2\x96\x9C","\xE2\x96\x96",
++    "\xE2\x96\x9E","\xE2\x96\x8C","\xE2\x96\x9B","\xE2\x96\x84",
++    "\xE2\x96\x9F","\xE2\x96\x99","\xE2\x96\x88"
++};
++
++//Appends the host text representation of ZX character b. Returns new length
++static int nbhd_emit_zx_char(char *text,int len,z80_byte b)
++{
++    if (b==0x60) { text[len++]=(char)0xC2; text[len++]=(char)0xA3; return len; } //£
++    if (b==0x7F) { text[len++]=(char)0xC2; text[len++]=(char)0xA9; return len; } //©
++    if (b=='\\') { text[len++]='\\'; text[len++]='\\'; return len; }
++    if (b==0x80) { memcpy(&text[len],"\\..",3); return len+3; }
++    if (b>=0x81 && b<=0x8F) {
++        memcpy(&text[len],nbhd_block_utf8[b-0x80],3);
++        return len+3;
++    }
++    if (b>=0x90 && b<=0xA4) { text[len++]='\\'; text[len++]='a'+(b-0x90); return len; }
++    if (b>=32 && b<127) { text[len++]=(char)b; return len; }
++    sprintf(&text[len],"\\x%02X",b);
++    return len+4;
++}
++
++static int nbhd_hex_digit(char c)
++{
++    if (c>='0' && c<='9') return c-'0';
++    if (c>='A' && c<='F') return c-'A'+10;
++    if (c>='a' && c<='f') return c-'a'+10;
++    return -1;
++}
++
++//Column of a zmakebas block escape: . none, ' top, , bottom, : both.
++//Returns -1 if the character is not a column character
++static int nbhd_block_column(char c)
++{
++    if (c=='.') return 0;
++    if (c=='\'') return 1;
++    if (c==',') return 2;
++    if (c==':') return 3;
++    return -1;
++}
++
++//Decodes a host text representation at text[i] back into ZX character *out.
++//Returns the number of text characters consumed, 0 if nothing special here
++static int nbhd_decode_zx_char(const char *text,int i,z80_byte *out)
++{
++    unsigned char c=text[i];
++
++    if (c==0xC2) {
++        unsigned char d=text[i+1];
++        if (d==0xA3) { *out=0x60; return 2; } //£
++        if (d==0xA9) { *out=0x7F; return 2; } //©
++    }
++
++    if (c==0xE2 && (unsigned char)text[i+1]==0x96) {
++        unsigned char d=text[i+2];
++        int k;
++        for (k=1;k<16;k++) {
++            if ((unsigned char)nbhd_block_utf8[k][2]==d) { *out=0x80+k; return 3; }
++        }
++    }
++
++    if (c=='\\') {
++        char d=text[i+1];
++        if (d=='\\') { *out='\\'; return 2; }
++        if (d>='a' && d<='u') { *out=0x90+(d-'a'); return 2; }
++        if (d>='A' && d<='U' && d!='X') { *out=0x90+(d-'A'); return 2; }
++        if (d=='x' || d=='X') {
++            int h=nbhd_hex_digit(text[i+2]);
++            int l=(h>=0 ? nbhd_hex_digit(text[i+3]) : -1);
++            if (l>=0) { *out=(h<<4)|l; return 4; }
++        }
++        int left=nbhd_block_column(d);
++        int right=(left>=0 ? nbhd_block_column(text[i+2]) : -1);
++        if (right>=0) {
++            *out=0x80 | ((left&1)<<1) | ((left&2)<<2)      //top left 2, bottom left 8
++                      | (right&1) | ((right&2)<<1);        //top right 1, bottom right 4
++            return 3;
++        }
++    }
++
++    return 0;
++}
++
 +//5-byte ZX Spectrum representation of a (non-negative) number
 +static void nbhd_zx_number(double value,z80_byte *out)
 +{
@@ -404,11 +520,20 @@ index da8d4cf..06067ff 100644
 +            i++;
 +            while (text[i]) {
 +                if (len>=outmax-8) return -1;
-+                out[len++]=text[i];
-+                i++;
-+                if (out[len-1]=='"') break;
++                if (text[i]=='"') { out[len++]='"'; i++; break; }
++                z80_byte zxc;
++                int consumed=nbhd_decode_zx_char(text,i,&zxc);
++                if (consumed) { out[len++]=zxc; i +=consumed; }
++                else { out[len++]=text[i]; i++; }
 +            }
 +            continue;
++        }
++
++        //block graphics, UDG escapes etc. are valid anywhere
++        if (c=='\\' || (unsigned char)c>=0x80) {
++            z80_byte zxc;
++            int consumed=nbhd_decode_zx_char(text,i,&zxc);
++            if (consumed) { out[len++]=zxc; i +=consumed; continue; }
 +        }
 +
 +        if ( (c>='0' && c<='9') || (c=='.' && text[i+1]>='0' && text[i+1]<='9') ) {
@@ -467,7 +592,10 @@ index da8d4cf..06067ff 100644
 +            if (matched==NBHD_TOKEN_REM) {
 +                while (text[i]) {
 +                    if (len>=outmax-2) return -1;
-+                    out[len++]=text[i++];
++                    z80_byte zxc;
++                    int consumed=nbhd_decode_zx_char(text,i,&zxc);
++                    if (consumed) { out[len++]=zxc; i +=consumed; }
++                    else { out[len++]=text[i]; i++; }
 +                }
 +            }
 +            if (matched==NBHD_TOKEN_BIN) after_bin=1;
@@ -531,7 +659,9 @@ index da8d4cf..06067ff 100644
 +//malloc'd string and stores its length in *out_len
 +static char *nbhd_detokenize(const z80_byte *body,int size,int *out_len)
 +{
-+    int cap=size*12+64;
++    //every program byte expands to at most 12 text characters (longest
++    //keyword plus surrounding spaces), plus a little per-line overhead
++    int cap=size*14+256;
 +    char *text=malloc(cap);
 +    if (text==NULL) return NULL;
 +    int len=0;
@@ -547,18 +677,20 @@ index da8d4cf..06067ff 100644
 +        len +=sprintf(&text[len],"%d ",number);
 +
 +        int in_string=0;
++        int in_rem=0;
 +        while (pos<end) {
 +            z80_byte b=body[pos];
 +            if (b==0x0D) { pos++; break; }
-+            if (!in_string && b==0x0E) { pos +=6; continue; } //hidden number form
-+            if (b=='"') in_string=!in_string;
-+            if (!in_string && b>=NBHD_TOKEN_BASE) {
++            if (!in_string && !in_rem && b==0x0E) { pos +=6; continue; } //hidden number form
++            if (!in_rem && b=='"') in_string=!in_string;
++            if (!in_string && !in_rem && b>=NBHD_TOKEN_BASE) {
 +                const char *kw=nbhd_token_names[b-NBHD_TOKEN_BASE];
 +                if (len && text[len-1]!=' ') text[len++]=' ';
 +                len +=sprintf(&text[len],"%s ",kw);
++                if (b==NBHD_TOKEN_REM) in_rem=1; //rest of the line is plain text
 +            }
 +            else {
-+                text[len++]=(b>=32 && b<127) ? (char)b : '?';
++                len=nbhd_emit_zx_char(text,len,b);
 +            }
 +            pos++;
 +        }
@@ -566,7 +698,7 @@ index da8d4cf..06067ff 100644
 +        while (len && text[len-1]==' ') len--; //no trailing spaces
 +        text[len++]='\n';
 +
-+        if (len>cap-1200) break; //can not happen with the cap above, but be safe
++        if (len>cap-32) break; //can not happen with the cap above, but be safe
 +    }
 +
 +    text[len]=0;
