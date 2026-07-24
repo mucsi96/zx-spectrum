@@ -31,6 +31,7 @@ ZOPTS=( --machine tbblue --enable-mmc --enable-divmmc-ports
 
 mkdir -p "$PROGRAMS"
 export ZESARUX_NEXTBASIC_DIR="$PROGRAMS"
+export ZESARUX_NEXTBASIC_HIGHLIGHT=1   # syntax colours in the NextBASIC editor
 
 # First run: take a private copy of the NextZXOS SD image, so OS-side state
 # stays per-user and a broken image is fixed by deleting ~/tbblue.mmc

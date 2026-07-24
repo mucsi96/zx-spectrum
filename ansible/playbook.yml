@@ -21,8 +21,10 @@
     zesarux_repo: "https://github.com/chernandezba/zesarux.git"
     zesarux_rev: "7d33f6bac01612d9b3c6619ffb85a325bf595198"
     zesarux_src: /usr/local/src/zesarux
-    patch_file: "{{ playbook_dir }}/../zesarux-nextbasic-hostdisk.patch"
-    build_stamp: "{{ zesarux_rev }}-{{ lookup('file', patch_file) | hash('sha1') }}"
+    patch_files:
+      - "{{ playbook_dir }}/../zesarux-nextbasic-hostdisk.patch"
+      - "{{ playbook_dir }}/../zesarux-nextbasic-highlight.patch"
+    build_stamp: "{{ zesarux_rev }}-{{ lookup('file', patch_files[0]) | hash('sha1') }}-{{ lookup('file', patch_files[1]) | hash('sha1') }}"
 
   tasks:
     - name: Install build and runtime packages
@@ -56,17 +58,19 @@
             git -C "{{ zesarux_src }}" clean -fdx src
           changed_when: true
 
-        - name: Copy NextBASIC host-disk patch
+        - name: Copy patches
           ansible.builtin.copy:
-            src: "{{ patch_file }}"
-            dest: "{{ zesarux_src }}/nextbasic-hostdisk.patch"
+            src: "{{ item }}"
+            dest: "{{ zesarux_src }}/{{ item | basename }}"
             mode: "0644"
+          loop: "{{ patch_files }}"
 
-        - name: Apply patch
+        - name: Apply patches
           ansible.builtin.command:
-            cmd: git apply nextbasic-hostdisk.patch
+            cmd: git apply {{ item | basename }}
             chdir: "{{ zesarux_src }}"
           changed_when: true
+          loop: "{{ patch_files }}"
 
         - name: Configure
           ansible.builtin.command:

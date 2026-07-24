@@ -1,0 +1,404 @@
+ZEsarUX (ZX Spectrum Next / tbblue) - NextBASIC editor syntax highlighting
+==========================================================================
+
+What it does
+    Colours the NextZXOS/NextBASIC full-screen editor, SpecNext-IDE style:
+
+        statements  (PRINT, LET, GO TO, IF, THEN...)   blue
+        functions   (RND, INT, CHR$, PEEK...)          magenta
+        numbers                                        red
+        strings                                        green
+        REM comment text                               cyan
+        line numbers, variables, operators             black (unchanged)
+
+    Colouring is live: it follows the listing while you scroll, wraps
+    correctly across continued lines, and updates as you type. Program
+    output while a program RUNs is left uncoloured, as are the NextZXOS
+    menus, the cursor and anything else that is not a listing line.
+
+How it works
+    The editor draws each character in its own 8x8 cell with attribute 38h
+    (black ink on grey paper), so every glyph can be given its own ink
+    colour without changing machine behaviour. Once per frame the patch
+    reads the ULA screen (RAM 5), recognizes each cell by a CRC32
+    fingerprint of its 8-byte bitmap (matching the editor font of the
+    NextZXOS release bundled with ZEsarUX), parses rows that start with a
+    BASIC line number (plus their wrapped continuations) and rewrites the
+    attribute cells. Only cells whose attribute is the editor's own 38h
+    (or a colour set by this patch) are ever touched; unrecognized glyphs
+    and non-listing rows simply stay black.
+
+Activation
+    Inert unless the environment variable ZESARUX_NEXTBASIC_HIGHLIGHT=1
+    is set. Requires the normal Spectrum core (the default).
+
+    If a future NextZXOS release changes the editor font, highlighting
+    degrades gracefully to no colouring (nothing else breaks); the
+    fingerprint table in machines/tbblue.c is regenerated from a screen
+    dump in that case.
+
+How to apply (against https://github.com/chernandezba/zesarux master)
+    cd zesarux
+    git apply /path/to/zesarux-nextbasic-highlight.patch
+
+    Independent of zesarux-nextbasic-hostdisk.patch: apply either one or
+    both, in any order.
+
+    Then build as usual, e.g.:
+    cd src && ./configure && make
+
+Verified
+    Against ZEsarUX master 7d33f6b (13.1-SN, July 2026) with the bundled
+    tbblue.mmc (NextZXOS 2.06H): coloured listings including wrapped
+    string lines and REM lines, live recolouring while typing, uncoloured
+    program output during RUN, untouched menus and cursor.
+
+diff --git a/src/machines/tbblue.c b/src/machines/tbblue.c
+index 3b41ad3..885bd28 100644
+--- a/src/machines/tbblue.c
++++ b/src/machines/tbblue.c
+@@ -8917,4 +8917,316 @@ void tbblue_dac_mix(void)
+     v /=2;
+     audio_valor_enviar_sonido_derecho=v;
+ 
+-}
+\ No newline at end of file
++}
++
++/*
++
++NextBASIC editor syntax highlighting (SpecNext-IDE style)
++
++Colours the NextZXOS/NextBASIC full-screen editor by rewriting ULA
++attribute cells once per frame: the editor draws every character in its
++own 8x8 cell with attribute 38h (black ink on grey paper), so each glyph
++can get its own ink colour without touching the machine's behaviour.
++
++Screen characters are recognized by CRC32 fingerprints of their 8-byte
++cell bitmaps (matching the editor font of the NextZXOS release bundled
++with ZEsarUX). Rows are then parsed like a BASIC listing - line numbers,
++keywords, functions, numbers, strings, REM comments - and each class gets
++an ink:
++
++    statements + THEN/TO/AND/...   blue
++    functions (RND, INT, CHR$...)  magenta
++    numbers                        red
++    strings                        green
++    REM comment text               cyan
++
++Cells whose attribute is not 38h (menus, cursor, inverse video...) and
++glyphs that are not recognized are left alone, so anything unexpected
++simply stays uncoloured. Inert unless ZESARUX_NEXTBASIC_HIGHLIGHT=1.
++
++*/
++
++//Auto-disables itself on the first frame if ZESARUX_NEXTBASIC_HIGHLIGHT is unset
++z80_bit tbblue_nextbasic_highlight={1};
++
++#define NBHL_ATTR_BASE   0x38  //black on grey: the editor's attribute
++#define NBHL_INK_MASK    0x07
++
++#define NBHL_CLASS_NONE     0  //black (default ink)
++#define NBHL_CLASS_KEYWORD  1  //blue
++#define NBHL_CLASS_NUMBER   2  //red
++#define NBHL_CLASS_FUNCTION 3  //magenta
++#define NBHL_CLASS_STRING   4  //green
++#define NBHL_CLASS_COMMENT  5  //cyan
++
++//class value doubles as the ink colour
++
++struct s_nbhl_glyph {
++    char character;
++    unsigned long crc;
++};
++
++//CRC32 fingerprints of the NextZXOS editor font glyphs (NextZXOS 2.06H,
++//the release inside the tbblue.mmc bundled with ZEsarUX). Unknown glyphs
++//are simply not highlighted
++static struct s_nbhl_glyph nbhl_glyphs[]={
++    {'!',0x7B119370UL},{'"',0xC2ED85C6UL},{'#',0xDB6EBB06UL},{'$',0xCB710A1DUL},
++    {'%',0x10E40166UL},{'&',0x1456E741UL},{'\'',0x551B9395UL},{'(',0xE2858E85UL},
++    {')',0x1012A3A1UL},{'*',0xFD5CDD5AUL},{'+',0x6F3F42E7UL},{',',0xBE5F14BDUL},
++    {'-',0x75D650FBUL},{'.',0xF50CB5F8UL},{'/',0x917C779FUL},{'0',0x9807184EUL},
++    {'1',0x60FEA370UL},{'2',0x496A76E9UL},{'3',0x2765BEF3UL},{'4',0x80EFCABDUL},
++    {'5',0x40EB9B67UL},{'6',0x086BA70AUL},{'7',0xF26DEA1AUL},{'8',0x1D505E48UL},
++    {'9',0x0AC19202UL},{':',0x4F005ABAUL},{';',0x0B7E4C1BUL},{'<',0xF4A5159DUL},
++    {'=',0x55C61114UL},{'>',0x9D37428DUL},{'?',0xB09CBF0FUL},{'@',0x3BCA8F80UL},
++    {'A',0x50F31387UL},{'B',0xF1D13C7DUL},{'C',0x8B7B9B0DUL},{'D',0xAD374422UL},
++    {'E',0xB03DF238UL},{'F',0xF1F8E945UL},{'G',0x6BA4EC3EUL},{'H',0x3288AA6FUL},
++    {'I',0xCB3FAAE0UL},{'J',0xF4458CCCUL},{'K',0x24C39E84UL},{'L',0x2CB079B0UL},
++    {'M',0x9AF4648BUL},{'N',0xF3A8ED6FUL},{'O',0x5BB200E6UL},{'P',0x8F431899UL},
++    {'Q',0x05B806C1UL},{'R',0xBA7CD2C7UL},{'S',0xCB8CA77EUL},{'T',0x34A8ED4AUL},
++    {'U',0xE7E5AB90UL},{'V',0x5A57FDA4UL},{'W',0x77CBC101UL},{'X',0x12BD9C91UL},
++    {'Y',0x192EEEB3UL},{'Z',0xAB7C38CFUL},{'[',0xBC1A3941UL},{']',0x897C1742UL},
++    {'^',0x21BB49D2UL},{'_',0x482030E4UL},{'a',0xC616E793UL},{'b',0x8BE33A80UL},
++    {'c',0xAEFF860EUL},{'d',0x7E3B7F62UL},{'e',0x8D9AD86CUL},{'f',0xF7398D7BUL},
++    {'g',0xCE804832UL},{'h',0x10236B05UL},{'i',0xF87DB335UL},{'j',0x0E021BC1UL},
++    {'k',0xD7DCD777UL},{'l',0x81406D5DUL},{'m',0xBD1BBD9CUL},{'n',0xD8D0CE3BUL},
++    {'o',0x5402F2ADUL},{'p',0xE711565BUL},{'q',0x0FE15599UL},{'r',0xDD0CFFF1UL},
++    {'s',0x0088898CUL},{'t',0x6ABFEA06UL},{'u',0x28E23F17UL},{'v',0x4582EB42UL},
++    {'w',0x4EFF4E2BUL},{'x',0xF2083910UL},{'y',0x29F1C79EUL},{'z',0xC26C7E97UL}
++};
++
++#define NBHL_NUM_GLYPHS (sizeof(nbhl_glyphs)/sizeof(nbhl_glyphs[0]))
++
++static const char *nbhl_statements[]={
++    "GO TO","GO SUB","GOTO","GOSUB","DEF FN","OPEN #","CLOSE #","REM",
++    "PRINT","LPRINT","INPUT","LET","DIM","READ","DATA","RESTORE","FOR",
++    "NEXT","IF","THEN","ELSE","RUN","STOP","CONTINUE","RETURN","PAUSE",
++    "POKE","RANDOMIZE","CLS","CLEAR","NEW","LIST","LLIST","LOAD","SAVE",
++    "MERGE","VERIFY","ERASE","CAT","FORMAT","MOVE","BEEP","BORDER","PLOT",
++    "DRAW","CIRCLE","INK","PAPER","FLASH","BRIGHT","INVERSE","OVER","OUT",
++    "COPY","AND","OR","NOT","TO","STEP","LINE",
++    NULL
++};
++
++static const char *nbhl_functions[]={
++    "INKEY$","SCREEN$","VAL$","STR$","CHR$","RND","PI","FN","POINT","ATTR",
++    "AT","TAB","CODE","VAL","LEN","SIN","COS","TAN","ASN","ACS","ATN","LN",
++    "EXP","INT","SQR","SGN","ABS","PEEK","IN","USR","BIN",
++    NULL
++};
++
++static unsigned long nbhl_crc_table[256];
++static int nbhl_crc_table_ready=0;
++
++static void nbhl_make_crc_table(void)
++{
++    unsigned long c;
++    int n,k;
++    for (n=0;n<256;n++) {
++        c=(unsigned long)n;
++        for (k=0;k<8;k++) c=(c&1) ? 0xEDB88320UL ^ (c>>1) : c>>1;
++        nbhl_crc_table[n]=c;
++    }
++    nbhl_crc_table_ready=1;
++}
++
++static unsigned long nbhl_crc32(const z80_byte *buf,int len)
++{
++    unsigned long c=0xFFFFFFFFUL;
++    int n;
++    for (n=0;n<len;n++) c=nbhl_crc_table[(c^buf[n])&0xFF] ^ (c>>8);
++    return c^0xFFFFFFFFUL;
++}
++
++//Character shown in a screen cell, ' ' for blank, 0 for unrecognized
++static char nbhl_cell_char(z80_byte *screen,int row,int col)
++{
++    z80_byte glyph[8];
++    int scan;
++    int base=((row>>3)<<11) + ((row&7)<<5) + col;
++    int blank=1;
++    for (scan=0;scan<8;scan++) {
++        glyph[scan]=screen[base+(scan<<8)];
++        if (glyph[scan]) blank=0;
++    }
++    if (blank) return ' ';
++
++    unsigned long crc=nbhl_crc32(glyph,8);
++    unsigned int i;
++    for (i=0;i<NBHL_NUM_GLYPHS;i++) {
++        if (nbhl_glyphs[i].crc==crc) return nbhl_glyphs[i].character;
++    }
++    return 0;
++}
++
++static int nbhl_word_char(char c)
++{
++    return ( (c>='A' && c<='Z') || (c>='a' && c<='z') || (c>='0' && c<='9') || c=='$' );
++}
++
++//Longest keyword from the list matching text at i (word boundary applies).
++//Returns its length, or 0
++static int nbhl_match_keyword(const char **list,const char *text,int i)
++{
++    int best=0;
++    int t;
++    for (t=0;list[t]!=NULL;t++) {
++        const char *kw=list[t];
++        int kl=strlen(kw);
++        if (kl<=best) continue;
++        if (strncmp(&text[i],kw,kl)) continue;
++        if (nbhl_word_char(text[i+kl])) continue; //inside a longer word
++        best=kl;
++    }
++    return best;
++}
++
++//Persistent parser state across wrapped rows
++static int nbhl_in_string=0;
++static int nbhl_in_rem=0;
++
++//Classifies the 32 characters of one row into ink classes
++static void nbhl_classify_row(const char *text,z80_byte *cls)
++{
++    int i=0;
++
++    memset(cls,NBHL_CLASS_NONE,32);
++
++    //a row whose first characters are only spaces then digits then a space
++    //starts a new BASIC line: reset the string/comment state and skip the
++    //line number (line numbers are at most 4 digits, right-aligned)
++    int j=0;
++    while (j<8 && text[j]==' ') j++;
++    int digits=0;
++    while (j<8 && text[j]>='0' && text[j]<='9') { j++; digits++; }
++    if (digits>0 && digits<=4 && text[j]==' ') {
++        nbhl_in_string=0;
++        nbhl_in_rem=0;
++        i=j; //line number stays in the default ink
++    }
++
++    for (;i<32;i++) {
++        char c=text[i];
++
++        if (nbhl_in_rem) { cls[i]=NBHL_CLASS_COMMENT; continue; }
++
++        if (nbhl_in_string) {
++            cls[i]=NBHL_CLASS_STRING;
++            if (c=='"') nbhl_in_string=0;
++            continue;
++        }
++
++        if (c=='"') {
++            cls[i]=NBHL_CLASS_STRING;
++            nbhl_in_string=1;
++            continue;
++        }
++
++        if (c>='0' && c<='9') {
++            //not part of a variable name like A1
++            char prev=(i==0 ? ' ' : text[i-1]);
++            if ( (prev>='A' && prev<='Z') || (prev>='a' && prev<='z') ) continue;
++            int k=i;
++            while (k<32 && ((text[k]>='0' && text[k]<='9') || text[k]=='.')) k++;
++            while (i<k) cls[i++]=NBHL_CLASS_NUMBER;
++            i--;
++            continue;
++        }
++
++        if ((c>='A' && c<='Z') && (i==0 || !nbhl_word_char(text[i-1]))) {
++            int kl=nbhl_match_keyword(nbhl_statements,text,i);
++            int is_function=0;
++            int kl2=nbhl_match_keyword(nbhl_functions,text,i);
++            if (kl2>kl) { kl=kl2; is_function=1; }
++            if (kl) {
++                int is_rem=(kl==3 && !strncmp(&text[i],"REM",3));
++                int k;
++                for (k=0;k<kl && i+k<32;k++) {
++                    cls[i+k]=(is_function ? NBHL_CLASS_FUNCTION : NBHL_CLASS_KEYWORD);
++                }
++                i +=kl-1;
++                if (is_rem) nbhl_in_rem=1;
++                continue;
++            }
++        }
++    }
++}
++
++void tbblue_nextbasic_highlight_frame(void)
++{
++    static int checked_env=0;
++    if (!checked_env) {
++        checked_env=1;
++        char *e=getenv("ZESARUX_NEXTBASIC_HIGHLIGHT");
++        if (e==NULL || e[0]=='0' || e[0]==0) {
++            tbblue_nextbasic_highlight.v=0;
++            return;
++        }
++        nbhl_make_crc_table();
++        debug_printf(VERBOSE_INFO,"NextBASIC editor syntax highlighting enabled");
++    }
++
++    if (!nbhl_crc_table_ready) return;
++
++    //only in +3e mode (NextZXOS running)
++    if ((tbblue_registers[3]&7)!=3) return;
++
++    //the editor works on the normal ULA screen in RAM 5
++    z80_byte *screen=tbblue_ram_memory_pages[5*2];
++
++    char text[33];
++    z80_byte cls[32];
++    int row,col;
++
++    nbhl_in_string=0;
++    nbhl_in_rem=0;
++
++    //a row is only coloured when it starts a numbered BASIC line, or when
++    //it continues one that wrapped (previous row ran to the last column).
++    //That keeps ordinary program output uncoloured while a program runs
++    int prev_can_continue=0;
++
++    for (row=0;row<24;row++) {
++        int recognized=0;
++        for (col=0;col<32;col++) {
++            char c=nbhl_cell_char(screen,row,col);
++            if (c==0) c=1; //unrecognized: placeholder, never matches anything
++            else if (c!=' ') recognized++;
++            text[col]=c;
++        }
++        text[32]=0;
++
++        int is_listing_row=0;
++        if (recognized) {
++            int j=0;
++            while (j<8 && text[j]==' ') j++;
++            int digits=0;
++            while (j<8 && text[j]>='0' && text[j]<='9') { j++; digits++; }
++            if (digits>0 && digits<=4 && text[j]==' ') is_listing_row=1;
++            if (prev_can_continue) is_listing_row=1;
++        }
++
++        if (!is_listing_row) {
++            //blank row or plain program output: logical line ends here
++            nbhl_in_string=0;
++            nbhl_in_rem=0;
++            prev_can_continue=0;
++            memset(cls,NBHL_CLASS_NONE,32);
++        }
++        else {
++            nbhl_classify_row(text,cls);
++            prev_can_continue=(text[31]!=' '); //full row: wraps into the next
++        }
++
++        //apply inks, only ever touching the editor's own attribute value
++        //or colours we set ourselves earlier
++        z80_byte *attr=&screen[6144+row*32];
++        for (col=0;col<32;col++) {
++            z80_byte current=attr[col];
++            if ((current & ~NBHL_INK_MASK)!=NBHL_ATTR_BASE) continue;
++            if ((current & NBHL_INK_MASK)!=0 &&
++                (current & NBHL_INK_MASK)>NBHL_CLASS_COMMENT) continue;
++            z80_byte wanted=NBHL_ATTR_BASE | cls[col];
++            if (current!=wanted) attr[col]=wanted;
++        }
++    }
++}
+diff --git a/src/machines/tbblue.h b/src/machines/tbblue.h
+index 4a569dc..ac38baf 100644
+--- a/src/machines/tbblue.h
++++ b/src/machines/tbblue.h
+@@ -379,3 +379,6 @@ extern z80_byte tbblue_dac_c;
+ extern z80_byte tbblue_dac_d;
+ 
+ #endif
++
++extern z80_bit tbblue_nextbasic_highlight;
++extern void tbblue_nextbasic_highlight_frame(void);
+diff --git a/src/cores/core_spectrum.c b/src/cores/core_spectrum.c
+index 9e0d179..024e501 100644
+--- a/src/cores/core_spectrum.c
++++ b/src/cores/core_spectrum.c
+@@ -1175,6 +1176,10 @@ void cpu_core_loop_spectrum(void)
+     //Interrupcion de procesador y marca final de frame
+     if (interrupcion_timer_generada.v) {
+         //printf ("Generada interrupcion timer %d pc=%XH\n",contador_segundo,reg_pc);
++
++        //NextBASIC editor syntax highlighting, once per frame
++        if (tbblue_nextbasic_highlight.v && MACHINE_IS_TBBLUE) tbblue_nextbasic_highlight_frame();
++
+         interrupcion_timer_generada.v=0;
+         esperando_tiempo_final_t_estados.v=0;
+         interlaced_numero_frame++;

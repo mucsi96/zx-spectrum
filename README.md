@@ -26,24 +26,28 @@ The previous Fuse-based 48K setup is preserved in [README-fuse.md](README-fuse.m
 ## Repository layout
 
 ```
-zesarux-nextbasic-hostdisk.patch  the emulator patch (single git-apply-able diff)
-spectrum-launcher.sh              console program-picker / kiosk launcher
-programs/*.bas                    program listings (the host format: plain text)
-flake.nix                         Nix flake: patched emulator + `spectrum` runner
-ansible/                          provisioning for the Raspberry Pi over SSH
+zesarux-nextbasic-hostdisk.patch   emulator patch 1: host-disk SAVE/LOAD (git-apply-able diff)
+zesarux-nextbasic-highlight.patch  emulator patch 2: editor syntax highlighting
+spectrum-launcher.sh               console program-picker / kiosk launcher
+programs/*.bas                     program listings (the host format: plain text)
+flake.nix                          Nix flake: patched emulator + `spectrum` runner
+ansible/                           provisioning for the Raspberry Pi over SSH
 ```
 
-## The patch
+## The patches
 
-`zesarux-nextbasic-hostdisk.patch` applies against
+Both patches apply against
 [ZEsarUX](https://github.com/chernandezba/zesarux) master (cut and tested at
-`7d33f6b`, v13.1-SN):
+`7d33f6b`, v13.1-SN), independently and in any order:
 
 ```bash
 git clone https://github.com/chernandezba/zesarux && cd zesarux
 git apply /path/to/zesarux-nextbasic-hostdisk.patch
+git apply /path/to/zesarux-nextbasic-highlight.patch
 cd src && ./configure --enable-sdl2 && make -j$(nproc)
 ```
+
+### 1. Host-disk SAVE/LOAD (`zesarux-nextbasic-hostdisk.patch`)
 
 It hooks the +3DOS API jump table (`DOS_OPEN` 0106h, `DOS_READ` 0112h, …)
 that NextZXOS uses for *all* file access, but only when the TBBlue runs in
@@ -70,6 +74,32 @@ real autoexec and boots to the NextZXOS menu.
 
 The bundled `tbblue.mmc` NextZXOS SD image ships with the ZEsarUX sources,
 so no extra downloads are needed.
+
+### 2. Editor syntax highlighting (`zesarux-nextbasic-highlight.patch`)
+
+Colours the NextBASIC full-screen editor, SpecNext-IDE style, live while
+you scroll and type:
+
+| Token                                       | Colour  |
+|---------------------------------------------|---------|
+| statements (`PRINT`, `LET`, `GO TO`, …)     | blue    |
+| functions (`RND`, `INT`, `CHR$`, …)         | magenta |
+| numbers                                     | red     |
+| strings                                     | green   |
+| `REM` comment text                          | cyan    |
+| line numbers, variables, operators          | black   |
+
+The editor draws each character in its own 8×8 attribute cell, so the
+patch recolours the ink per cell once per frame: it recognizes the
+characters on the ULA screen by CRC fingerprints of their glyph bitmaps
+(the editor font of the bundled NextZXOS), parses rows that start with a
+line number (plus wrapped continuations), and rewrites only attribute
+cells that carry the editor's own colour. Program output during `RUN`,
+the menus and the cursor stay untouched; if a future NextZXOS changes the
+editor font, the effect gracefully degrades to no colouring.
+
+Enabled by `ZESARUX_NEXTBASIC_HIGHLIGHT=1` (the launcher and the flake
+runner set it).
 
 ### Known limitations (all inherent to the ROM, not the patch)
 

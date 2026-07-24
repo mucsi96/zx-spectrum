@@ -25,7 +25,10 @@
           src = zesarux-src;
           sourceRoot = "source/src";
 
-          patches = [ ./zesarux-nextbasic-hostdisk.patch ];
+          patches = [
+            ./zesarux-nextbasic-hostdisk.patch
+            ./zesarux-nextbasic-highlight.patch
+          ];
           patchFlags = [ "-p2" ]; # we are inside src/, diff paths are src/...
 
           nativeBuildInputs = [ pkgs.pkg-config ];
@@ -87,6 +90,7 @@
             fi
 
             export ZESARUX_NEXTBASIC_DIR="$data/programs"
+            export ZESARUX_NEXTBASIC_HIGHLIGHT=1
             if [ $# -ge 1 ]; then
               export ZESARUX_NEXTBASIC_AUTOLOAD="$1"
             fi
