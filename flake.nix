@@ -106,7 +106,9 @@
 
             exec zesarux --machine tbblue --enable-mmc --enable-divmmc-ports \
               --mmc-file "$data/tbblue.mmc" \
-              --nowelcomemessage --quickexit \
+              --nowelcomemessage --quickexit --hidemousepointer \
+              --stats-disable-check-updates --stats-disable-check-yesterday-users \
+              --stats-send-already-asked --tbblue-autoconfigure-sd-already-asked \
               --def-f-function F10 ExitEmulator
           '';
         };

@@ -37,6 +37,11 @@ fi
 ZOPTS=( --machine tbblue --enable-mmc --enable-divmmc-ports
         --mmc-file "$MMC"
         --fullscreen --disablefooter --nowelcomemessage --quickexit
+        --hidemousepointer                           # no mouse cursor over the emulator
+        --stats-disable-check-updates                # no "new version" popup
+        --stats-disable-check-yesterday-users
+        --stats-send-already-asked                   # no first-run statistics question
+        --tbblue-autoconfigure-sd-already-asked
         --def-f-function F10 ExitEmulator )          # F10 quits, like Fuse
 
 mkdir -p "$PROGRAMS"
