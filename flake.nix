@@ -41,6 +41,12 @@
             libpulseaudio
           ];
 
+          # the scripts use "#!/usr/bin/env bash", which does not exist in
+          # the Nix build sandbox
+          postPatch = ''
+            patchShebangs .
+          '';
+
           # ZEsarUX ships its own (non-autotools) configure script
           configurePhase = ''
             runHook preConfigure
@@ -51,9 +57,12 @@
 
           enableParallelBuilding = true;
 
+          # "make install" generates install.sh at build time (again with an
+          # env shebang), so run the two steps explicitly through bash
           installPhase = ''
             runHook preInstall
-            make install
+            bash ./generate_install_sh.sh
+            bash ./install.sh
             runHook postInstall
           '';
 
